@@ -37,5 +37,6 @@ RUN DEBIAN_FRONTEND=noninteractive sudo apt install -y python3-pip ros-noetic-ac
 
 RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
 RUN echo "source /host/catkin_ws/devel/setup.bash" >> ~/.bashrc
+RUN echo "source /host/.secrets" >> ~/.bashrc
 COPY .tmux.conf /home/$USERNAME/.tmux.conf
 WORKDIR /host
