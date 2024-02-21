@@ -1,0 +1,11 @@
+<launch>
+
+<include file="$(find spot_driver)/launch/driver.launch">
+  <arg name="username" value="$(env SPOT_USERNAME)" />
+  <arg name="password" value="$(env SPOT_PASSWORD)" />
+  <arg name="hostname" value="$(env SPOT_HOSTNAME)" />
+</include>
+<include file="$(find spot_viz)/launch/view_robot.launch" />
+
+<include file="$(find brm_evanescence)/launch/stack.launch" />
+</launch>

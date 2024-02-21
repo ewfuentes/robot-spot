@@ -1,0 +1,57 @@
+<launch>
+  <node pkg="nodelet" type="nodelet" name="standalone_nodelet"  args="manager"/>
+
+  <node name="image_proc" pkg="nodelet" type="nodelet" ns="/spot/camera/frontleft"
+    args="load image_proc/rectify /standalone_nodelet">
+    <remap from="image_mono" to="image" />
+  </node>
+  <node name="image_proc" pkg="nodelet" type="nodelet" ns="/spot/camera/frontright"
+    args="load image_proc/rectify /standalone_nodelet">
+    <remap from="image_mono" to="image" />
+  </node>
+  <node name="image_proc" pkg="nodelet" type="nodelet" ns="/spot/camera/left"
+    args="load image_proc/rectify /standalone_nodelet">
+    <remap from="image_mono" to="image" />
+  </node>
+  <node name="image_proc" pkg="nodelet" type="nodelet" ns="/spot/camera/right"
+    args="load image_proc/rectify /standalone_nodelet">
+    <remap from="image_mono" to="image" />
+  </node>
+  <node name="image_proc" pkg="nodelet" type="nodelet" ns="/spot/camera/back"
+    args="load image_proc/rectify /standalone_nodelet">
+    <remap from="image_mono" to="image" />
+  </node>
+
+  <include file="$(find apriltag_ros)/launch/continuous_detection.launch" 
+    ns="/spot/apriltag/frontleft">
+    <arg name="camera_name" value="/spot/camera/frontleft" />
+  </include>
+  <include file="$(find apriltag_ros)/launch/continuous_detection.launch" 
+    ns="/spot/apriltag/frontright">
+    <arg name="camera_name" value="/spot/camera/frontright" />
+  </include>
+  <include file="$(find apriltag_ros)/launch/continuous_detection.launch" 
+    ns="/spot/apriltag/left">
+    <arg name="camera_name" value="/spot/camera/left" />
+  </include>
+  <include file="$(find apriltag_ros)/launch/continuous_detection.launch" 
+    ns="/spot/apriltag/right">
+    <arg name="camera_name" value="/spot/camera/right" />
+  </include>
+  <include file="$(find apriltag_ros)/launch/continuous_detection.launch" 
+    ns="/spot/apriltag/back">
+    <arg name="camera_name" value="/spot/camera/back" />
+  </include>
+
+  <rosparam command="load" file="$(find brm_evanescence)/config/apriltag_settings.yaml" ns="/spot/apriltag/frontleft/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/apriltag_settings.yaml" ns="/spot/apriltag/frontright/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/apriltag_settings.yaml" ns="/spot/apriltag/left/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/apriltag_settings.yaml" ns="/spot/apriltag/right/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/apriltag_settings.yaml" ns="/spot/apriltag/back/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/tags.yaml" ns="/spot/apriltag/frontleft/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/tags.yaml" ns="/spot/apriltag/frontright/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/tags.yaml" ns="/spot/apriltag/left/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/tags.yaml" ns="/spot/apriltag/right/apriltag_ros_continuous_node" />
+  <rosparam command="load" file="$(find brm_evanescence)/config/tags.yaml" ns="/spot/apriltag/back/apriltag_ros_continuous_node" />
+
+</launch>
