@@ -26,9 +26,4 @@ def main(topic_list):
 
 
 if __name__ == '__main__':
-    cameras = ['frontleft', 'frontright', 'left', 'right', 'back']
-    topic_list = [
-        f"/spot/apriltag/{camera}/tag_detections"
-        for camera in cameras
-    ]
-    main(topic_list)
+    main()

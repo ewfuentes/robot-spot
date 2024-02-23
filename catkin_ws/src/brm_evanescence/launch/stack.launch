@@ -2,6 +2,6 @@
 <launch>
 <include file="$(find brm_evanescence)/launch/image_proc.launch" />
 
-<node name="observation_node" pkg="brm_evanescence" type="observation_node.py" />
+<node name="estimation_node" pkg="brm_evanescence" type="estimation_node.py" />
 
 </launch>
