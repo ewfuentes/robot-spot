@@ -2,7 +2,7 @@
 
 CURDIR=$(pwd)
 
-rosdep install brm_evanescence
+rosdep install brm_evanescence --ignore-src -y
 cd $(dirname $0)/catkin_ws/src/spot_ros
 rosdep install --from-paths spot_cam spot_description spot_driver \
     spot_msgs spot_viz spot_wrapper --ignore-src -y
