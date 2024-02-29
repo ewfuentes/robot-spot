@@ -1,6 +1,5 @@
 
 <launch>
-<include file="$(find spot_description)/launch/description.launch" />
 <include file="$(find brm_evanescence)/launch/image_proc.launch" />
 
 <node name="estimation_node" pkg="brm_evanescence" type="estimation_node.py" />
