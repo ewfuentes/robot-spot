@@ -1,5 +1,6 @@
 <launch>
   <arg name="bag_file" />
+
   <include file="$(find brm_evanescence)/launch/stack.launch" />
   <node name="player" pkg="rosbag" type="play" args="-l $(arg bag_file)" />
   <include file="$(find spot_description)/launch/description.launch" />
