@@ -7,8 +7,10 @@ import rospy
 import tf2_ros
 import tf2_msgs
 import tf2_geometry_msgs
-import geometry_msgs
+import std_msgs
+import geometry_msgs.msg
 from apriltag_ros.msg import AprilTagDetectionArray
+import visualization_msgs.msg as viz
 import threading
 import datetime
 
@@ -21,6 +23,9 @@ from scipy.spatial.transform import Rotation
 import numpy as np
 np.set_printoptions(linewidth=200)
 
+def robot_time_from_ros_time(stamp: ros.Time):
+    return rtp.RobotTimestamp() + rtp.as_duration(stamp.secs) + rtp.as_duration(stamp.nsecs / 1e9)
+
 def ros_time_from_robot_time(timestamp: rtp.RobotTimestamp):
     one_second = datetime.timedelta(seconds=1)
     one_microsecond = datetime.timedelta(microseconds=1)
@@ -30,33 +35,48 @@ def ros_time_from_robot_time(timestamp: rtp.RobotTimestamp):
 
 
 def robot_se2_from_stamped_transform(b_from_a_msg):
-    origin = tf2_geometry_msgs.PointStamped()
-    unit_x = tf2_geometry_msgs.PointStamped()
-    unit_x.point.x = 1.0
-    origin_in_b = tf2_geometry_msgs.do_transform_point(origin, b_from_a_msg)
-    x_in_b = tf2_geometry_msgs.do_transform_point(unit_x, b_from_a_msg)
+    origin = np.zeros(3)
+    unit_x = np.zeros(3)
+    unit_x[0] = 1.0
 
-    theta = math.atan2(x_in_b.point.y, x_in_b.point.x)
-    return se2.SE2(theta, np.array([origin_in_b.point.x, origin_in_b.point.y]))
+    b_from_a_rot = Rotation.from_quat([
+        b_from_a_msg.transform.rotation.x,
+        b_from_a_msg.transform.rotation.y,
+        b_from_a_msg.transform.rotation.z,
+        b_from_a_msg.transform.rotation.w,
+    ])
 
-def stamped_transform_from_se2(b_from_a, b, a, ros_time):
+    b_from_a_trans = np.array([
+        b_from_a_msg.transform.translation.x,
+        b_from_a_msg.transform.translation.y,
+        b_from_a_msg.transform.translation.z,
+    ])
+
+    origin_in_b = b_from_a_rot.apply(origin) + b_from_a_trans
+    x_in_b = b_from_a_rot.apply(unit_x) + b_from_a_trans
+
+    theta = math.atan2(x_in_b[1] - origin_in_b[1], x_in_b[0] - origin_in_b[0])
+    return se2.SE2(theta, np.array([origin_in_b[0], origin_in_b[1]]))
+
+def stamped_transform_from_se2(parent_from_child, parent, child, ros_time):
     out = geometry_msgs.msg.TransformStamped()
     out.header.stamp.secs = ros_time.secs
     out.header.stamp.nsecs = ros_time.nsecs
-    out.header.frame_id = b
-    out.child_frame_id = a
+    out.header.frame_id = parent
+    out.child_frame_id = child
 
-    out.transform.translation.x = b_from_a.translation()[0]
-    out.transform.translation.y = b_from_a.translation()[1]
+    out.transform.translation.x = parent_from_child.translation()[0]
+    out.transform.translation.y = parent_from_child.translation()[1]
     out.transform.translation.z = 0.0
 
-    b_from_a_rot = Rotation.from_rotvec(np.array([0, 0, b_from_a.so2().log()]))
+    b_from_a_rot = Rotation.from_rotvec(np.array([0, 0, parent_from_child.so2().log()]))
     b_from_a_quat = b_from_a_rot.as_quat()
     
     out.transform.rotation.x = b_from_a_quat[0]
     out.transform.rotation.y = b_from_a_quat[1]
     out.transform.rotation.z = b_from_a_quat[2]
     out.transform.rotation.w = b_from_a_quat[3]
+    rospy.loginfo(out)
     return out
 
 def stamped_transform_from_point2(pt_in_b, b, a, ros_time):
@@ -88,7 +108,7 @@ def compute_observations(detections, tf_buffer):
 
         id = detection.id[0]
         stamp = stamped_pose.header.stamp
-        time_of_validity = rtp.RobotTimestamp() + rtp.as_duration(stamp.secs) + rtp.as_duration(stamp.nsecs / 1e9)
+        time_of_validity = robot_time_from_ros_time(stamp)
 
         camera_from_tag = detection.pose.pose
 
@@ -98,8 +118,44 @@ def compute_observations(detections, tf_buffer):
         range_m = math.sqrt(range_m_sq)
         bearing_rad = math.atan2(body_from_tag.pose.position.y, body_from_tag.pose.position.x)
 
+        rospy.loginfo(f'body_from_tag: {body_from_tag}')
+        rospy.loginfo(f'id: {id} bearing: {bearing_rad} range_m: {range_m}')
+
         observations.append((time_of_validity, BeaconObservation(id, range_m, bearing_rad)))
     return observations
+
+#  Note that the EKF should be locked when calling this function
+def perform_process_update(ekf, tf_buffer, update_time):
+
+    dt = update_time - ekf.estimate.time_of_validity
+    dt_days = dt / datetime.timedelta(days=1)
+    if dt_days > 1.0:
+        ekf.estimate.time_of_validity = update_time - rtp.as_duration(0.01)
+
+    ros_past_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
+
+    # try:
+    timeout_s = rospy.Duration(1.0)
+    ros_update_time = ros_time_from_robot_time(update_time)
+    odom_from_past_robot = tf_buffer.lookup_transform('odom', 'body', ros_past_time, timeout_s)
+    odom_from_new_robot = tf_buffer.lookup_transform('odom', 'body', ros_update_time, timeout_s)
+    rospy.loginfo('*' * 20)
+    rospy.loginfo(f'ros_odom_from_past_robot: \n{odom_from_past_robot}\n' +
+                  f'ros_odom_from_new_robot:\n {odom_from_new_robot}')
+
+
+    odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
+    odom_from_new_robot = robot_se2_from_stamped_transform(odom_from_new_robot)
+    past_robot_from_new_robot = odom_from_past_robot.inverse() * odom_from_new_robot
+
+    rospy.loginfo(f'odom_from_past_robot: \n{odom_from_past_robot}\n' +
+                  f'odom_from_new_robot:\n {odom_from_new_robot}\n' +
+                  f'past_robot_from_new_robot:\n {past_robot_from_new_robot}')
+
+
+    ekf.predict(update_time, past_robot_from_new_robot)
+    # except Exception as e:
+    #     rospy.loginfo(f'Failed to run process update: {dt} \n {e}')
 
 
 def tag_callback(detection_msg, tf_buffer, ekf, ekf_lock):
@@ -114,75 +170,149 @@ def tag_callback(detection_msg, tf_buffer, ekf, ekf_lock):
 
             time, beacon_obs = obs
             ekf_tov = ekf.estimate.time_of_validity
-            dt_us = (time - ekf_tov) / datetime.timedelta(microseconds=1)
-            dt_days = (time - ekf_tov) / datetime.timedelta(days=1)
+            dt = time - ekf_tov
+            dt_ms = dt / datetime.timedelta(milliseconds=1)
 
-            if dt_us < -1e5:
-                rospy.loginfo(f'received stale observations ekf tov: {ekf_tov} obs: {obs}')
+            if dt_ms < -500.0:
+                rospy.loginfo(f'received stale observations ekf tov: {ekf_tov} obs: {obs} dt: {dt}')
                 continue
 
-            if dt_days > 1.0:
-                # If there is a very large jump, just update the time of validity, this has
-                # the effect of not adding any noise on the next observation
-                ekf.estimate.time_of_validity = time
-
-            if dt_us > 0.0:
-                past_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
-                obs_time = ros_time_from_robot_time(time)
-
-                timeout_s = rospy.Duration(0.1)
-                odom_from_past_robot = tf_buffer.lookup_transform('odom', 'body', past_time, timeout_s)
-                odom_from_obs_robot = tf_buffer.lookup_transform('odom', 'body', obs_time, timeout_s)
-
-                odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
-                odom_from_obs_robot = robot_se2_from_stamped_transform(odom_from_obs_robot)
-
-                past_robot_from_obs_robot = odom_from_past_robot.inverse() * odom_from_obs_robot
-
-                ekf.predict(time, past_robot_from_obs_robot)
+            if dt_ms > 0.0:
+                perform_process_update(ekf, tf_buffer, time)
 
             ekf.update([beacon_obs])
 
 
-def timer_callback(timer_event, tf_buffer, ekf, ekf_lock, ros_time_from_bag_time, tf_publisher):
+def create_tf_msg(ekf, ekf_lock):
     with ekf_lock:
-        # Publish TF transforms
-        # is_offset_set = (ros_time_from_bag_time.secs != 0
-        #                  or ros_time_from_bag_time.nsecs != 0)
-        # if (not is_offset_set and
-        #         ekf.estimate.time_of_validity != rtp.RobotTimestamp()):
-        #     bag_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
-        #     ros_time_from_bag_time = timer_event.current_expected - bag_time
-        #     is_offset_set = True
-
-        rospy.loginfo(f"timer: {timer_event.current_expected} ekf_time: {ekf.estimate.time_of_validity} offset: {ros_time_from_bag_time}")
         if ekf.estimate.time_of_validity == rtp.RobotTimestamp():
-            return
-            
+            return None
 
-        publish_time = ros_time_from_robot_time(ekf.estimate.time_of_validity) + ros_time_from_bag_time
+        publish_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
 
         tfs = []
-        tfs.append(stamped_transform_from_se2(
-            ekf.estimate.local_from_robot(), 'map', 'body', publish_time))
-
         for beacon_id in ekf.estimate.beacon_ids:
             tfs.append(stamped_transform_from_point2(
                 ekf.estimate.beacon_in_local(beacon_id),
                 'map', f'map_tag_{beacon_id}', publish_time))
 
-        tfm = tf2_msgs.msg.TFMessage(tfs)
-        tf_publisher.publish(tfm)
-        rospy.loginfo(f'Published {len(tfs)} transforms')
+        tfs.append(stamped_transform_from_se2(
+            ekf.estimate.local_from_robot(), 'map', 'body_ekf', publish_time))
+
+        return tf2_msgs.msg.TFMessage(tfs)
+
+
+def create_viz_msg(ekf, ekf_lock):
+    with ekf_lock:
+        if ekf.estimate.time_of_validity == rtp.RobotTimestamp():
+            return None
+
+        publish_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
+        viz_msg = viz.MarkerArray()
+
+        marker_header = std_msgs.msg.Header()
+        marker_header.stamp.secs = publish_time.secs
+        marker_header.stamp.nsecs = publish_time.nsecs
+        marker_header.frame_id = "map"
+
+        # Landmark viz
+        for beacon_id in ekf.estimate.beacon_ids:
+            marker = viz.Marker()
+            marker.header = marker_header
+            marker.ns = 'tag'
+            marker.id = beacon_id
+
+            marker.type = viz.Marker.LINE_STRIP
+            marker.action = viz.Marker.ADD
+            marker.scale.x = 0.01
+            marker.pose.orientation.w = 1.0
+
+            beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
+            beacon_cov = ekf.estimate.beacon_cov(beacon_id)
+
+            cov_root = np.linalg.cholesky(beacon_cov)
+
+            theta = np.arange(0, 2 * np.pi, 0.1)
+            np.append(theta, 0.01)
+            xs = 2 * np.cos(theta)
+            ys = 2 * np.sin(theta)
+
+            pts = np.vstack([xs, ys])
+
+            tx_pts = cov_root @ pts
+
+            for i in range(tx_pts.shape[1]):
+                x, y = tx_pts[:, i]
+                marker.points.append(
+                    geometry_msgs.msg.Point(
+                        x=x+beacon_in_local[0], y=y+beacon_in_local[1]))
+                marker.colors.append(std_msgs.msg.ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0))
+
+            viz_msg.markers.append(marker)
+
+        # Robot viz
+        marker = viz.Marker()
+        marker.header = marker_header
+        marker.ns = 'robot'
+        marker.id = 0
+
+        marker.type = viz.Marker.LINE_STRIP
+        marker.action = viz.Marker.ADD
+        marker.scale.x = 0.01
+        marker.pose.orientation.w = 1.0
+
+        local_from_robot = ekf.estimate.local_from_robot()
+        robot_cov = ekf.estimate.robot_cov()
+
+        cov_root = np.linalg.cholesky(robot_cov + np.identity(3) * 1e-6)
+
+
+        theta = np.arange(0, 2 * np.pi, 0.1)
+        np.append(theta, 0.01)
+        xs = 2 * np.cos(theta)
+        ys = 2 * np.sin(theta)
+
+        pts = np.vstack([xs, ys, np.zeros_like(xs)])
+
+        tx_pts_in_robot = cov_root @ pts
+        tx_pts_in_local = local_from_robot @ tx_pts_in_robot[:2, :]
+
+        for i in range(tx_pts_in_local.shape[1]):
+            x, y = tx_pts_in_local[:, i]
+
+            marker.points.append(
+                geometry_msgs.msg.Point(x=x, y=y))
+            marker.colors.append(std_msgs.msg.ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0))
+
+        viz_msg.markers.append(marker)
+
+        return viz_msg
+
+def timer_callback(timer_event, ekf, ekf_lock, tf_buffer, tf_publisher, viz_publisher):
+    # Publish TF transforms
+
+    with ekf_lock:
+        update_time = robot_time_from_ros_time(timer_event.current_real)
+        perform_process_update(ekf, tf_buffer, update_time)
+
+    maybe_tf_message = create_tf_msg(ekf, ekf_lock)
+    if maybe_tf_message is not None:
+        tf_publisher.publish(maybe_tf_message)
+
+    # Publish a visualization message
+    maybe_viz_msg = create_viz_msg(ekf, ekf_lock)
+    if maybe_viz_msg is not None:
+        viz_publisher.publish(maybe_viz_msg)
 
 
 def main():
     rospy.init_node('observation_node')
 
-    tf_buffer = tf2_ros.Buffer()
+    tf_buffer = tf2_ros.Buffer(rospy.Duration(60.0))
     tf_listener = tf2_ros.TransformListener(tf_buffer)
 
     tf_publisher = rospy.Publisher('/tf', tf2_msgs.msg.TFMessage, queue_size=16)
+    viz_publisher = rospy.Publisher('/estimate_markers', viz.MarkerArray, queue_size=16)
     tag_detection_subscribers = []
 
     ekf_config = esp.EkfSlamConfig(
@@ -203,8 +333,6 @@ def main():
     ekf = esp.EkfSlam(ekf_config, rtp.RobotTimestamp())
     ekf_lock = threading.Lock()
 
-    ros_time_from_bag_time = rospy.Duration(0)
-
     for camera in ['frontleft', 'frontright', 'left', 'back', 'right']:
         topic_name = f"/spot/apriltag/{camera}/tag_detections"
         tag_detection_subscribers.append(
@@ -214,8 +342,8 @@ def main():
                     lambda data: tag_callback(data, tf_buffer, ekf, ekf_lock)
                 ))
 
-    rospy.Timer(rospy.Duration(0.02),
-                lambda data: timer_callback(data, tf_buffer, ekf, ekf_lock, ros_time_from_bag_time, tf_publisher))
+    rospy.Timer(rospy.Duration(0.1),
+                lambda data: timer_callback(data, ekf, ekf_lock, tf_buffer, tf_publisher, viz_publisher))
 
     try:
         rospy.spin()
