@@ -25,6 +25,9 @@ import numpy as np
 
 np.set_printoptions(linewidth=200)
 
+BODY_FRAME = "flat_body"
+MAP_FRAME = "map"
+
 
 def robot_time_from_ros_time(stamp: ros.Time):
     return (
@@ -117,7 +120,7 @@ def compute_observations(detections, tf_buffer):
         camera_frame = stamped_pose.header.frame_id
 
         body_from_camera = tf_buffer.lookup_transform(
-            "body", camera_frame, rospy.Time.now(), rospy.Duration(1.0)
+            BODY_FRAME, camera_frame, rospy.Time.now(), rospy.Duration(1.0)
         )
 
         id = detection.id[0]
@@ -158,10 +161,10 @@ def perform_process_update(ekf, tf_buffer, update_time):
     timeout_s = rospy.Duration(1.0)
     ros_update_time = ros_time_from_robot_time(update_time)
     odom_from_past_robot = tf_buffer.lookup_transform(
-        "odom", "flat_body", ros_past_time, timeout_s
+        "odom", BODY_FRAME, ros_past_time, timeout_s
     )
     odom_from_new_robot = tf_buffer.lookup_transform(
-        "odom", "flat_body", ros_update_time, timeout_s
+        "odom", BODY_FRAME, ros_update_time, timeout_s
     )
 
     odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
@@ -200,7 +203,7 @@ def create_obs_viz(observations, camera_name):
         unobserved_beacon_ids.remove(obs.maybe_id)
         marker_header = std_msgs.msg.Header()
         marker_header.stamp = obs_tov
-        marker_header.frame_id = "flat_body"
+        marker_header.frame_id = BODY_FRAME
         marker.header = marker_header
 
         marker.ns = f"obs_{camera_name}"
@@ -226,7 +229,7 @@ def create_obs_viz(observations, camera_name):
 
     for id in unobserved_beacon_ids:
         marker = viz.Marker()
-        marker.header.frame_id = "flat_body"
+        marker.header.frame_id = BODY_FRAME
         marker.ns = f"obs_{camera_name}"
         marker.id = id
         marker.pose.orientation.w = 1.0
@@ -284,7 +287,7 @@ def create_tf_msg(ekf, ekf_lock):
             tfs.append(
                 stamped_transform_from_point2(
                     ekf.estimate.beacon_in_local(beacon_id),
-                    "map",
+                    MAP_FRAME,
                     f"map_tag_{beacon_id}",
                     publish_time,
                 )
@@ -293,8 +296,8 @@ def create_tf_msg(ekf, ekf_lock):
         tfs.append(
             stamped_transform_from_se2(
                 ekf.estimate.local_from_robot().inverse(),
-                "flat_body",
-                "map",
+                BODY_FRAME,
+                MAP_FRAME,
                 publish_time,
             )
         )
@@ -313,7 +316,7 @@ def create_viz_msg(ekf, ekf_lock):
         marker_header = std_msgs.msg.Header()
         marker_header.stamp.secs = publish_time.secs
         marker_header.stamp.nsecs = publish_time.nsecs
-        marker_header.frame_id = "map"
+        marker_header.frame_id = MAP_FRAME
 
         # Landmark viz
         for beacon_id in ekf.estimate.beacon_ids:
