@@ -435,7 +435,6 @@ def tick_estimator(
 
     # Sort them in order
     observations = sorted(observations, key=lambda x: x[0])
-    rospy.loginfo(observations)
 
     # Update the filter with each observation
     for time, obs in observations:
@@ -461,9 +460,6 @@ def tick_estimator(
 
 def main():
     rospy.init_node("observation_node")
-
-    for p in sys.path:
-        rospy.loginfo(p)
 
     tf_buffer = tf2_ros.Buffer(rospy.Duration(60.0))
     tf_listener = tf2_ros.TransformListener(tf_buffer)
