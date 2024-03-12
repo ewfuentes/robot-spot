@@ -481,6 +481,8 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         landmark = Landmark(id = beacon_id, x=beacon_in_local[0], y=beacon_in_local[1])
         map_out.landmarks.append(landmark)
 
+    map_out.estimate_proto = ekf.estimate.to_proto_string()
+
     map_publisher.publish(map_out)
 
     marker_out = viz.MarkerArray()

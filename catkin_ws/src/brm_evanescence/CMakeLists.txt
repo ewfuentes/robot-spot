@@ -57,6 +57,7 @@ add_service_files(
   FILES
   SaveMap.srv
   LoadMap.srv
+  CreatePlan.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -160,6 +161,7 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   src/estimation_node.py
+  src/planning_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
