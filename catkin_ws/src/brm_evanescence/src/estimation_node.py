@@ -25,6 +25,7 @@ from scipy.spatial.transform import Rotation
 from dataclasses import dataclass, field
 
 from brm_evanescence.srv import SaveMapResponse, SaveMap, LoadMapResponse, LoadMap
+from brm_evanescence.msg import Map, Landmark
 
 import numpy as np
 
@@ -169,8 +170,9 @@ def compute_observations(detections, tf_buffer):
         id = detection.id[0]
         stamp = stamped_pose.header.stamp
         time_of_validity = robot_time_from_ros_time(stamp)
-
-        body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp)
+        timeout = rospy.Duration(0.25)
+        
+        body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
 
         camera_from_tag = detection.pose.pose
 
@@ -468,6 +470,74 @@ def load_map_handler(req, ekf):
     rospy.loginfo(req)
     return LoadMapResponse(success=ekf.load_map(req.load_path))
 
+
+def publish_map(timer_event, ekf, map_publisher, viz_publisher):
+    map_out = Map()
+    map_out.header.stamp = ros_time_from_robot_time(ekf.estimate.time_of_validity)
+    map_out.header.frame_id = MAP_FRAME
+
+    for beacon_id in ekf.estimate.beacon_ids:
+        beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
+        landmark = Landmark(id = beacon_id, x=beacon_in_local[0], y=beacon_in_local[1])
+        map_out.landmarks.append(landmark)
+
+    map_publisher.publish(map_out)
+
+    marker_out = viz.MarkerArray()
+
+    for beacon_id in ekf.estimate.beacon_ids:
+        beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
+        marker = viz.Marker()
+        marker.header.stamp = ros_time_from_robot_time(ekf.estimate.time_of_validity)
+        marker.header.frame_id = "map"
+        marker.ns = "map/blocks"
+        marker.id = beacon_id
+        marker.type = viz.Marker.CUBE
+        marker.action = viz.Marker.ADD
+        MARKER_HEIGHT_M = 0.5
+        marker.pose.position.x = beacon_in_local[0]
+        marker.pose.position.y = beacon_in_local[1]
+        marker.pose.position.z = MARKER_HEIGHT_M / 2.0
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.1
+        marker.scale.y = 0.1
+        marker.scale.z = MARKER_HEIGHT_M
+
+        marker.color.a = 1.0
+        marker.color.r = 0.25
+        marker.color.g = 0.75
+        marker.color.b = 0.25
+
+        marker_out.markers.append(marker)
+
+        text_marker = viz.Marker()
+        text_marker.header.stamp = ros_time_from_robot_time(ekf.estimate.time_of_validity)
+        text_marker.header.frame_id = "map"
+        text_marker.ns = "map/label"
+        text_marker.id = beacon_id
+        text_marker.type = viz.Marker.TEXT_VIEW_FACING
+        text_marker.action = viz.Marker.ADD
+        text_marker.pose.position.x = beacon_in_local[0]
+        text_marker.pose.position.y = beacon_in_local[1]
+        text_marker.pose.position.z = MARKER_HEIGHT_M + 0.1
+        text_marker.pose.orientation.w = 1.0
+
+        TEXT_HEIGHT_M = 0.2
+        text_marker.scale.z = TEXT_HEIGHT_M
+
+        text_marker.color.a = 1.0
+        text_marker.color.r = 0.8
+        text_marker.color.g = 0.8
+        text_marker.color.b = 0.8
+        text_marker.text = f"tag {beacon_id}"
+
+        marker_out.markers.append(text_marker)
+
+
+    viz_publisher.publish(marker_out)
+
+
 def main():
     rospy.init_node("estimation_node")
 
@@ -475,6 +545,7 @@ def main():
     tf_listener = tf2_ros.TransformListener(tf_buffer)
     tf_publisher = rospy.Publisher("/tf", tf2_msgs.msg.TFMessage, queue_size=16)
     viz_publisher = rospy.Publisher("/estimate_markers", viz.MarkerArray, queue_size=16)
+    map_publisher = rospy.Publisher("/map", Map, queue_size=16)
     debug_publisher = rospy.Publisher(
         "/estimate_debug", std_msgs.msg.String, queue_size=16
     )
@@ -524,6 +595,16 @@ def main():
             tf_publisher,
             viz_publisher,
             debug_publisher,
+        ),
+    )
+
+    rospy.Timer(
+        rospy.Duration(1.0),
+        lambda timer_event: publish_map(
+            timer_event,
+            esp.EkfSlam(ekf),
+            map_publisher,
+            viz_publisher
         ),
     )
 
