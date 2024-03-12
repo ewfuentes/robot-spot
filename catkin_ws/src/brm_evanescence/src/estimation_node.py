@@ -24,6 +24,8 @@ from common.liegroups import se2_python as se2
 from scipy.spatial.transform import Rotation
 from dataclasses import dataclass, field
 
+from brm_evanescence.srv import SaveMapResponse, SaveMap, LoadMapResponse, LoadMap
+
 import numpy as np
 
 np.set_printoptions(linewidth=200)
@@ -458,8 +460,16 @@ def tick_estimator(
         tf_publisher.publish(tf_message)
 
 
+def save_map_handler(req, ekf):
+    return SaveMapResponse(success=ekf.save_map(req.save_path))
+
+
+def load_map_handler(req, ekf):
+    rospy.loginfo(req)
+    return LoadMapResponse(success=ekf.load_map(req.load_path))
+
 def main():
-    rospy.init_node("observation_node")
+    rospy.init_node("estimation_node")
 
     tf_buffer = tf2_ros.Buffer(rospy.Duration(60.0))
     tf_listener = tf2_ros.TransformListener(tf_buffer)
@@ -469,6 +479,7 @@ def main():
         "/estimate_debug", std_msgs.msg.String, queue_size=16
     )
     tag_detection_subscribers = []
+
 
     ekf_config = esp.EkfSlamConfig(
         max_num_beacons=10,
@@ -489,6 +500,9 @@ def main():
 
     observations_queue = ObservationsQueue([f"{c}_fisheye" for c in camera_list])
     ekf = esp.EkfSlam(ekf_config, rtp.RobotTimestamp())
+
+    rospy.Service(f'{rospy.get_name()}/save_map', SaveMap, lambda req: save_map_handler(req, esp.EkfSlam(ekf)))
+    rospy.Service(f'{rospy.get_name()}/load_map', LoadMap, lambda req: load_map_handler(req, ekf))
 
     for camera in camera_list:
         topic_name = f"/spot/apriltag/{camera}/tag_detections"
