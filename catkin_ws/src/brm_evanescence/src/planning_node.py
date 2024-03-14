@@ -13,14 +13,18 @@ import planning.probabilistic_road_map_python as prmp
 import experimental.beacon_sim.belief_road_map_planner_python as brmp
 import experimental.beacon_sim.ekf_slam_python as esp
 
-def run_optimistic_brm_planner(road_map, potential, local_from_robot):
+
+def run_optimistic_brm_planner(road_map, potential, ekf_estimate):
     ...
 
-def run_expected_brm_planner(road_map, potential, local_from_robot):
+
+def run_expected_brm_planner(road_map, potential, ekf_estimate):
     ...
 
-def run_landmark_brm_planner(road_map, potential, local_from_robot):
+
+def run_landmark_brm_planner(road_map, potential, ekf_estimate):
     ...
+
 
 class PlanningNode():
     def __init__(self):
@@ -36,10 +40,8 @@ class PlanningNode():
         with self._map_lock:
             self._map = data
 
-
-
-    def handle_plan_request(self, request):
-        rospy.loginfo(request)
+    def handle_plan_req(self, req):
+        rospy.loginfo(req)
         
         # Get the latest estimate
         with self._map_lock:
@@ -47,24 +49,23 @@ class PlanningNode():
         rospy.loginfo(ekf_estimate)
 
         # Load the beacon potential
-        with open(request.beacon_potential_path, 'rb') as file_in:
+        with open(req.beacon_potential_path, 'rb') as file_in:
             beacon_potential = bpp.BeaconPotential(file_in.read())
 
         # Load the road map
-        with open(request.road_map_path, 'rb') as file_in:
+        with open(req.road_map_path, 'rb') as file_in:
             road_map = prmp.RoadMap(file_in.read())
 
         # call the appropriate planner
         if req.planning_method == CreatePlanRequest.OPTIMISTIC_BRM:
-            run_optimistic_brm_planner(road_map, beacon_potential, local_from_robot)
+            run_optimistic_brm_planner(road_map, beacon_potential, ekf_estimate)
         elif req.planning_method == CreatePlanRequest.EXPECTED_BRM:
-            run_expected_brm_planner(road_map, beacon_potential, local_from_robot)
+            run_expected_brm_planner(road_map, beacon_potential, ekf_estimate)
         elif req.planning_method == CreatePlanRequest.LANDMARK_BRM:
-            run_landmark_brm_planner(road_map, beacon_potential, local_from_robot)
+            run_landmark_brm_planner(road_map, beacon_potential, ekf_estimate)
         else:
             rospy.logerror(f'Unknown Planning Method: {request.planning_method}')
             return CreatePlanResponse(success=False)
-        
 
         return CreatePlanResponse(success=True)
 
