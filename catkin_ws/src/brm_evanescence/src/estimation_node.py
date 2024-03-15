@@ -56,6 +56,7 @@ class ObservationsQueue:
         }
 
     def insert(self, detections):
+        rospy.loginfo('in insert')
         with self._lock:
             detection_time = robot_time_from_ros_time(detections.header.stamp)
             camera_name = detections.header.frame_id
@@ -63,6 +64,7 @@ class ObservationsQueue:
             self._queue.put(self.PrioritizedItem(detection_time, detections))
 
     def are_samples_available(self):
+        rospy.loginfo('in samples available')
         with self._lock:
             oldest_update_time = min(self._last_update_time_from_camera.values())
             return (
@@ -71,13 +73,17 @@ class ObservationsQueue:
             )
 
     def pop(self):
+        rospy.loginfo('in pop')
         with self._lock:
+            rospy.loginfo('checking for samples available')
             if not self.are_samples_available():
+                rospy.loginfo('no samples')
                 return None
+            rospy.loginfo('sample_available')
             return self._queue.get().item
 
 
-def robot_time_from_ros_time(stamp: ros.Time):
+def robot_time_from_ros_time(stamp: rospy.Time):
     return (
         rtp.RobotTimestamp()
         + rtp.as_duration(stamp.secs)
@@ -264,9 +270,9 @@ def create_obs_viz(observations, camera_name, ekf_tov):
 
         marker.pose.orientation.w = 1.0
 
-        marker.scale.x = 0.1
-        marker.scale.y = 0.1
-        marker.scale.z = 0.1
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
 
         is_old = obs_and_time[0] - ekf_tov < -rtp.as_duration(0.5)
 
@@ -406,11 +412,6 @@ def create_viz_msg(ekf):
     return viz_msg
 
 
-def observation_callback(detections, observations_queue, queue_lock):
-    with queue_lock:
-        observations_queue.append(detections)
-
-
 def tick_estimator(
     timer_event,
     observations_queue,
@@ -422,12 +423,15 @@ def tick_estimator(
 ):
     # Collect all available observations
     observations = []
+    rospy.loginfo(f"samples available: {observations_queue.are_samples_available()} {observations_queue._last_update_time_from_camera}")
     while observations_queue.are_samples_available():
+        rospy.loginfo('popping')
         detections_msg = observations_queue.pop()
         new_detections = compute_observations(detections_msg.detections, tf_buffer)
+        new_detections = sorted(new_detections, key=lambda x: x[0])
+        rospy.loginfo(f'adding detections from: {new_detections[0]} to {new_detections[-1]}')
 
         # Update the detections visualization
-        new_detections = sorted(new_detections, key=lambda x: x[0])
         viz_publisher.publish(
             create_obs_viz(
                 new_detections,
@@ -437,8 +441,11 @@ def tick_estimator(
         )
         observations.extend(new_detections)
 
+
+
     # Sort them in order
     observations = sorted(observations, key=lambda x: x[0])
+    rospy.loginfo(f'num obs:{len(observations)}')
 
     # Update the filter with each observation
     for time, obs in observations:
@@ -458,6 +465,7 @@ def tick_estimator(
 
     # publish the estimate
     tf_message = create_tf_msg(ekf)
+    rospy.loginfo(tf_message)
     if tf_message is not None:
         tf_publisher.publish(tf_message)
 
@@ -565,8 +573,8 @@ def main():
         beacon_pos_process_noise_m_per_rt_s=0.001,
         range_measurement_noise_m=0.1,
         bearing_measurement_noise_rad=0.02,
-        on_map_load_position_uncertainty_m=0.1,
-        on_map_load_heading_uncertainty_rad=0.01,
+        on_map_load_position_uncertainty_m=10.0,
+        on_map_load_heading_uncertainty_rad=0.4,
     )
 
     camera_list = ["frontleft", "frontright", "left", "back", "right"]
@@ -577,13 +585,16 @@ def main():
     rospy.Service(f'{rospy.get_name()}/save_map', SaveMap, lambda req: save_map_handler(req, esp.EkfSlam(ekf)))
     rospy.Service(f'{rospy.get_name()}/load_map', LoadMap, lambda req: load_map_handler(req, ekf))
 
+    def obs_callback(data):
+        observations_queue.insert(data)
+
     for camera in camera_list:
         topic_name = f"/spot/apriltag/{camera}/tag_detections"
         tag_detection_subscribers.append(
             rospy.Subscriber(
                 topic_name,
                 AprilTagDetectionArray,
-                lambda data: observations_queue.insert(data),
+                obs_callback,
             )
         )
 

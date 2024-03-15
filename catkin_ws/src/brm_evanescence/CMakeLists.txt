@@ -58,6 +58,7 @@ add_service_files(
   SaveMap.srv
   LoadMap.srv
   CreatePlan.srv
+  ExecutePlan.srv
 )
 
 ## Generate actions in the 'action' folder

@@ -54,6 +54,7 @@
   <depend>visualization_msgs</depend>
   <depend>python3-scipy</depend>
   <depend>python3-numpy</depend>
+  <depend>actionlib</depend>
   <buildtool_depend>catkin</buildtool_depend>
   <exec_depend>image_proc</exec_depend>
   <exec_depend>apriltag_ros</exec_depend>

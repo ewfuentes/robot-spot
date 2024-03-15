@@ -1,0 +1,4 @@
+/clock
+/map
+/tf
+/tf_static

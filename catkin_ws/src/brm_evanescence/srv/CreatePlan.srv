@@ -1,9 +1,10 @@
-string OPTIMISTIC_BRM="optimistic"
-string EXPECTED_BRM="expected"
-string LANDMARK_BRM="landmark"
+string OPTIMISTIC_BRM=optimistic
+string EXPECTED_BRM=expected
+string LANDMARK_BRM=landmark
 
 string beacon_potential_path
 string road_map_path
 string planning_method
+int32 goal_node
 ---
 bool success
