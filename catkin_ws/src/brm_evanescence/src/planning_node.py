@@ -9,6 +9,7 @@ import tf2_ros
 import visualization_msgs.msg as viz
 import geometry_msgs
 import actionlib
+import time
 
 from brm_evanescence.srv import CreatePlanResponse, CreatePlan, CreatePlanRequest
 from brm_evanescence.srv import ExecutePlanResponse, ExecutePlan
@@ -308,20 +309,24 @@ class PlanningNode:
 
         trajectory = spot_msgs.msg.TrajectoryGoal()
         trajectory.precise_positioning = True
-        trajectory.duration = rospy.Duration.from_sec(3.0)
+        trajectory.duration.data = rospy.Duration(3.0)
 
-        for pt in self._plan.nodes[1:]:
+        for node_id in self._plan.nodes[1:]:
             map_from_robot = geometry_msgs.msg.PoseStamped()
             map_from_robot.header.frame_id = 'map'
-            pt_loc = self._road_map.point(pt)
+            pt_loc = self._road_map.point(node_id)
             map_from_robot.pose.position.x = pt_loc[0]
             map_from_robot.pose.position.y = pt_loc[1]
             map_from_robot.pose.position.z = 0.0
             map_from_robot.pose.orientation.w = 1.0
-            trajectory.target_pose.append(map_from_robot)
+            trajectory.target_pose = map_from_robot
 
-        self._traj_client.send_goal(trajectory)
-        self._traj_client.wait_for_result(rospy.Duration.from_sec(5.0))
+            
+            self._traj_client.send_goal(trajectory)
+            result = self._traj_client.wait_for_result(rospy.Duration(10.0))
+            rospy.loginfo(f'result for node {node_id}: {result}')
+            time.sleep(5.0)
+
 
         return ExecutePlanResponse(success=True)
 

@@ -49,38 +49,38 @@ class ObservationsQueue:
         item: AprilTagDetectionArray = field(compare=False)
 
     def __init__(self, camera_list):
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         self._queue = queue.PriorityQueue()
         self._last_update_time_from_camera = {
             c: rtp.RobotTimestamp() for c in camera_list
         }
 
     def insert(self, detections):
-        rospy.loginfo('in insert')
         with self._lock:
             detection_time = robot_time_from_ros_time(detections.header.stamp)
             camera_name = detections.header.frame_id
             self._last_update_time_from_camera[camera_name] = detection_time
             self._queue.put(self.PrioritizedItem(detection_time, detections))
 
+    def _are_samples_available_no_lock(self):
+        oldest_update_time = min(self._last_update_time_from_camera.values())
+
+        is_queue_empty = self._queue.empty()
+        if not is_queue_empty:
+            is_last_update_recent_enough = oldest_update_time >= self._queue.queue[0].receive_time
+            return is_last_update_recent_enough
+        return False
+
     def are_samples_available(self):
-        rospy.loginfo('in samples available')
         with self._lock:
-            oldest_update_time = min(self._last_update_time_from_camera.values())
-            return (
-                not self._queue.empty()
-                and oldest_update_time >= self._queue.queue[0].receive_time
-            )
+            result = self._are_samples_available_no_lock()
+        return result
 
     def pop(self):
-        rospy.loginfo('in pop')
         with self._lock:
-            rospy.loginfo('checking for samples available')
-            if not self.are_samples_available():
-                rospy.loginfo('no samples')
+            if not self._are_samples_available_no_lock():
                 return None
-            rospy.loginfo('sample_available')
-            return self._queue.get().item
+            return self._queue.get_nowait().item
 
 
 def robot_time_from_ros_time(stamp: rospy.Time):
@@ -169,6 +169,7 @@ def stamped_transform_from_point2(pt_in_b, b, a, ros_time):
 
 def compute_observations(detections, tf_buffer):
     observations = []
+    timeout = rospy.Duration(0.5)
     for detection in detections:
         stamped_pose = detection.pose
         camera_frame = stamped_pose.header.frame_id
@@ -176,9 +177,10 @@ def compute_observations(detections, tf_buffer):
         id = detection.id[0]
         stamp = stamped_pose.header.stamp
         time_of_validity = robot_time_from_ros_time(stamp)
-        timeout = rospy.Duration(0.25)
-        
-        body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
+        try:
+            body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
+        except:
+            continue
 
         camera_from_tag = detection.pose.pose
 
@@ -423,13 +425,10 @@ def tick_estimator(
 ):
     # Collect all available observations
     observations = []
-    rospy.loginfo(f"samples available: {observations_queue.are_samples_available()} {observations_queue._last_update_time_from_camera}")
     while observations_queue.are_samples_available():
-        rospy.loginfo('popping')
         detections_msg = observations_queue.pop()
         new_detections = compute_observations(detections_msg.detections, tf_buffer)
         new_detections = sorted(new_detections, key=lambda x: x[0])
-        rospy.loginfo(f'adding detections from: {new_detections[0]} to {new_detections[-1]}')
 
         # Update the detections visualization
         viz_publisher.publish(
@@ -441,11 +440,8 @@ def tick_estimator(
         )
         observations.extend(new_detections)
 
-
-
     # Sort them in order
     observations = sorted(observations, key=lambda x: x[0])
-    rospy.loginfo(f'num obs:{len(observations)}')
 
     # Update the filter with each observation
     for time, obs in observations:
@@ -598,7 +594,7 @@ def main():
             )
         )
 
-    rospy.Timer(
+    estimator_tick = rospy.Timer(
         rospy.Duration(0.05),
         lambda timer_event: tick_estimator(
             timer_event,
@@ -611,7 +607,7 @@ def main():
         ),
     )
 
-    rospy.Timer(
+    map_publish = rospy.Timer(
         rospy.Duration(1.0),
         lambda timer_event: publish_map(
             timer_event,
