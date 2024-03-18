@@ -10,21 +10,29 @@ import visualization_msgs.msg as viz
 import geometry_msgs
 import actionlib
 import time
+import numpy as np
 
 from brm_evanescence.srv import CreatePlanResponse, CreatePlan, CreatePlanRequest
 from brm_evanescence.srv import ExecutePlanResponse, ExecutePlan
 from brm_evanescence.msg import Map
 
+import common.liegroups.se2_python as se2
 import experimental.beacon_sim.beacon_potential_python as bpp
 import planning.probabilistic_road_map_python as prmp
 import experimental.beacon_sim.belief_road_map_planner_python as brmp
 import experimental.beacon_sim.ekf_slam_python as esp
+from scipy.spatial.transform import Rotation as R
 
 from typing import NamedTuple
+
+BODY_FRAME = "flat_body"
+MAP_FRAME = "map"
+
 
 class Plan(NamedTuple):
     time_of_validity: rospy.Time
     nodes: list[int]
+
 
 EKF_CONFIG = esp.EkfSlamConfig(
     max_num_beacons=10,
@@ -94,6 +102,35 @@ def run_landmark_brm_planner(road_map, potential, ekf):
     return result.nodes
 
 
+def robot_se2_from_stamped_transform(b_from_a_msg):
+    origin = np.zeros(3)
+    unit_x = np.zeros(3)
+    unit_x[0] = 1.0
+
+    b_from_a_rot = R.from_quat(
+        [
+            b_from_a_msg.transform.rotation.x,
+            b_from_a_msg.transform.rotation.y,
+            b_from_a_msg.transform.rotation.z,
+            b_from_a_msg.transform.rotation.w,
+        ]
+    )
+
+    b_from_a_trans = np.array(
+        [
+            b_from_a_msg.transform.translation.x,
+            b_from_a_msg.transform.translation.y,
+            b_from_a_msg.transform.translation.z,
+        ]
+    )
+
+    origin_in_b = b_from_a_rot.apply(origin) + b_from_a_trans
+    x_in_b = b_from_a_rot.apply(unit_x) + b_from_a_trans
+
+    theta = np.arctan2(x_in_b[1] - origin_in_b[1], x_in_b[0] - origin_in_b[0])
+    return se2.SE2(theta, np.array([origin_in_b[0], origin_in_b[1]]))
+
+
 class PlanningNode:
     def __init__(self):
         rospy.init_node("planning_node")
@@ -107,6 +144,8 @@ class PlanningNode:
         rospy.Service(
             f"{rospy.get_name()}/execute_plan", ExecutePlan, self.handle_plan_execution_request
         )
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
 
         self._traj_client = actionlib.SimpleActionClient('/spot/trajectory', spot_msgs.msg.TrajectoryAction)
 
@@ -309,23 +348,71 @@ class PlanningNode:
 
         trajectory = spot_msgs.msg.TrajectoryGoal()
         trajectory.precise_positioning = True
-        trajectory.duration.data = rospy.Duration(3.0)
+        trajectory.duration.data = rospy.Duration(20.0)
+        trajectory.target_pose.header.frame_id = BODY_FRAME
 
+        timeout = rospy.Duration(1.0)
         for node_id in self._plan.nodes[1:]:
-            map_from_robot = geometry_msgs.msg.PoseStamped()
-            map_from_robot.header.frame_id = 'map'
-            pt_loc = self._road_map.point(node_id)
-            map_from_robot.pose.position.x = pt_loc[0]
-            map_from_robot.pose.position.y = pt_loc[1]
-            map_from_robot.pose.position.z = 0.0
-            map_from_robot.pose.orientation.w = 1.0
-            trajectory.target_pose = map_from_robot
+            # Turn towards the next point
+            nowish = rospy.Time.now() - rospy.Duration(1.0)
+            map_from_robot = None
+            while True:
+                try:
+                    map_from_robot_ros = self._tf_buffer.lookup_transform(
+                            MAP_FRAME, BODY_FRAME, nowish, timeout)
+                    map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
+                    break
+                except Exception as e:
+                    rospy.loginfo(e)
+                    continue
 
+
+            goal_in_map = self._road_map.point(node_id)
+            goal_in_body = map_from_robot.inverse() @ goal_in_map
+            if np.linalg.norm(goal_in_body) < 0.5:
+                # We are near the next node, so we skip it
+                continue
+            theta = np.arctan2(goal_in_body[1], goal_in_body[0])
+            robot_from_goal_facing_robot = R.from_rotvec(np.array([0, 0, theta]))
+            robot_from_goal_facing_robot_quat = robot_from_goal_facing_robot.as_quat()
+
+            trajectory.target_pose.pose.position.x = 0.0
+            trajectory.target_pose.pose.position.y = 0.0
+            trajectory.target_pose.pose.position.z = 0.0
+            trajectory.target_pose.pose.orientation.x = robot_from_goal_facing_robot_quat[0]
+            trajectory.target_pose.pose.orientation.y = robot_from_goal_facing_robot_quat[1]
+            trajectory.target_pose.pose.orientation.z = robot_from_goal_facing_robot_quat[2]
+            trajectory.target_pose.pose.orientation.w = robot_from_goal_facing_robot_quat[3]
             
             self._traj_client.send_goal(trajectory)
             result = self._traj_client.wait_for_result(rospy.Duration(10.0))
-            rospy.loginfo(f'result for node {node_id}: {result}')
-            time.sleep(5.0)
+            time.sleep(2.0)
+
+            # Move towards the goal
+            nowish = rospy.Time.now() - rospy.Duration(1.0)
+            while True:
+                try:
+                    map_from_robot_ros = self._tf_buffer.lookup_transform(
+                            MAP_FRAME, BODY_FRAME, nowish, timeout)
+                    map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
+                    break
+                except Exception as e:
+                    rospy.loginfo(e)
+                    continue
+            goal_in_body = map_from_robot.inverse() @ goal_in_map
+
+
+            trajectory.target_pose.pose.position.x = goal_in_body[0]
+            trajectory.target_pose.pose.position.y = goal_in_body[1]
+            trajectory.target_pose.pose.position.z = 0.0
+            trajectory.target_pose.pose.orientation.x = 0.0
+            trajectory.target_pose.pose.orientation.y = 0.0
+            trajectory.target_pose.pose.orientation.z = 0.0
+            trajectory.target_pose.pose.orientation.w = 1.0
+            
+            self._traj_client.send_goal(trajectory)
+            result = self._traj_client.wait_for_result(rospy.Duration(10.0))
+            time.sleep(2.0)
 
 
         return ExecutePlanResponse(success=True)
