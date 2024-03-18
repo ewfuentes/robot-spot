@@ -49,7 +49,7 @@ class ObservationsQueue:
         item: AprilTagDetectionArray = field(compare=False)
 
     def __init__(self, camera_list):
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
         self._queue = queue.PriorityQueue()
         self._last_update_time_from_camera = {
             c: rtp.RobotTimestamp() for c in camera_list
@@ -62,22 +62,28 @@ class ObservationsQueue:
             self._last_update_time_from_camera[camera_name] = detection_time
             self._queue.put(self.PrioritizedItem(detection_time, detections))
 
+    def _are_samples_available_no_lock(self):
+        oldest_update_time = min(self._last_update_time_from_camera.values())
+
+        is_queue_empty = self._queue.empty()
+        if not is_queue_empty:
+            is_last_update_recent_enough = oldest_update_time >= self._queue.queue[0].receive_time
+            return is_last_update_recent_enough
+        return False
+
     def are_samples_available(self):
         with self._lock:
-            oldest_update_time = min(self._last_update_time_from_camera.values())
-            return (
-                not self._queue.empty()
-                and oldest_update_time >= self._queue.queue[0].receive_time
-            )
+            result = self._are_samples_available_no_lock()
+        return result
 
     def pop(self):
         with self._lock:
-            if not self.are_samples_available():
+            if not self._are_samples_available_no_lock():
                 return None
-            return self._queue.get().item
+            return self._queue.get_nowait().item
 
 
-def robot_time_from_ros_time(stamp: ros.Time):
+def robot_time_from_ros_time(stamp: rospy.Time):
     return (
         rtp.RobotTimestamp()
         + rtp.as_duration(stamp.secs)
@@ -163,6 +169,7 @@ def stamped_transform_from_point2(pt_in_b, b, a, ros_time):
 
 def compute_observations(detections, tf_buffer):
     observations = []
+    timeout = rospy.Duration(0.5)
     for detection in detections:
         stamped_pose = detection.pose
         camera_frame = stamped_pose.header.frame_id
@@ -170,9 +177,10 @@ def compute_observations(detections, tf_buffer):
         id = detection.id[0]
         stamp = stamped_pose.header.stamp
         time_of_validity = robot_time_from_ros_time(stamp)
-        timeout = rospy.Duration(0.25)
-        
-        body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
+        try:
+            body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
+        except:
+            continue
 
         camera_from_tag = detection.pose.pose
 
@@ -264,9 +272,9 @@ def create_obs_viz(observations, camera_name, ekf_tov):
 
         marker.pose.orientation.w = 1.0
 
-        marker.scale.x = 0.1
-        marker.scale.y = 0.1
-        marker.scale.z = 0.1
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
 
         is_old = obs_and_time[0] - ekf_tov < -rtp.as_duration(0.5)
 
@@ -406,11 +414,6 @@ def create_viz_msg(ekf):
     return viz_msg
 
 
-def observation_callback(detections, observations_queue, queue_lock):
-    with queue_lock:
-        observations_queue.append(detections)
-
-
 def tick_estimator(
     timer_event,
     observations_queue,
@@ -425,9 +428,9 @@ def tick_estimator(
     while observations_queue.are_samples_available():
         detections_msg = observations_queue.pop()
         new_detections = compute_observations(detections_msg.detections, tf_buffer)
+        new_detections = sorted(new_detections, key=lambda x: x[0])
 
         # Update the detections visualization
-        new_detections = sorted(new_detections, key=lambda x: x[0])
         viz_publisher.publish(
             create_obs_viz(
                 new_detections,
@@ -458,6 +461,7 @@ def tick_estimator(
 
     # publish the estimate
     tf_message = create_tf_msg(ekf)
+    rospy.loginfo(tf_message)
     if tf_message is not None:
         tf_publisher.publish(tf_message)
 
@@ -480,6 +484,8 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
         landmark = Landmark(id = beacon_id, x=beacon_in_local[0], y=beacon_in_local[1])
         map_out.landmarks.append(landmark)
+
+    map_out.estimate_proto = ekf.estimate.to_proto_string()
 
     map_publisher.publish(map_out)
 
@@ -563,8 +569,8 @@ def main():
         beacon_pos_process_noise_m_per_rt_s=0.001,
         range_measurement_noise_m=0.1,
         bearing_measurement_noise_rad=0.02,
-        on_map_load_position_uncertainty_m=0.1,
-        on_map_load_heading_uncertainty_rad=0.01,
+        on_map_load_position_uncertainty_m=10.0,
+        on_map_load_heading_uncertainty_rad=0.4,
     )
 
     camera_list = ["frontleft", "frontright", "left", "back", "right"]
@@ -575,17 +581,20 @@ def main():
     rospy.Service(f'{rospy.get_name()}/save_map', SaveMap, lambda req: save_map_handler(req, esp.EkfSlam(ekf)))
     rospy.Service(f'{rospy.get_name()}/load_map', LoadMap, lambda req: load_map_handler(req, ekf))
 
+    def obs_callback(data):
+        observations_queue.insert(data)
+
     for camera in camera_list:
         topic_name = f"/spot/apriltag/{camera}/tag_detections"
         tag_detection_subscribers.append(
             rospy.Subscriber(
                 topic_name,
                 AprilTagDetectionArray,
-                lambda data: observations_queue.insert(data),
+                obs_callback,
             )
         )
 
-    rospy.Timer(
+    estimator_tick = rospy.Timer(
         rospy.Duration(0.05),
         lambda timer_event: tick_estimator(
             timer_event,
@@ -598,7 +607,7 @@ def main():
         ),
     )
 
-    rospy.Timer(
+    map_publish = rospy.Timer(
         rospy.Duration(1.0),
         lambda timer_event: publish_map(
             timer_event,
