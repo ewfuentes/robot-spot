@@ -80,7 +80,8 @@ class ObservationsQueue:
         with self._lock:
             if not self._are_samples_available_no_lock():
                 return None
-            return self._queue.get_nowait().item
+            item = self._queue.get_nowait()
+            return item.receive_time, item.item
 
 
 def robot_time_from_ros_time(stamp: rospy.Time):
@@ -214,19 +215,22 @@ def perform_process_update(ekf, tf_buffer, update_time):
 
     # try:
     timeout_s = rospy.Duration(1.0)
-    ros_update_time = ros_time_from_robot_time(update_time)
-    odom_from_past_robot = tf_buffer.lookup_transform(
-        "odom", BODY_FRAME, ros_past_time, timeout_s
-    )
-    odom_from_new_robot = tf_buffer.lookup_transform(
-        "odom", BODY_FRAME, ros_update_time, timeout_s
-    )
+    try:
+        ros_update_time = ros_time_from_robot_time(update_time)
+        odom_from_past_robot = tf_buffer.lookup_transform(
+            "odom", BODY_FRAME, ros_past_time, timeout_s
+        )
+        odom_from_new_robot = tf_buffer.lookup_transform(
+            "odom", BODY_FRAME, ros_update_time, timeout_s
+        )
 
-    odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
-    odom_from_new_robot = robot_se2_from_stamped_transform(odom_from_new_robot)
-    past_robot_from_new_robot = odom_from_past_robot.inverse() * odom_from_new_robot
+        odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
+        odom_from_new_robot = robot_se2_from_stamped_transform(odom_from_new_robot)
+        past_robot_from_new_robot = odom_from_past_robot.inverse() * odom_from_new_robot
 
-    ekf.predict(update_time, past_robot_from_new_robot)
+        ekf.predict(update_time, past_robot_from_new_robot)
+    except:
+        ...
 
 
 def create_debug_message(observations):
@@ -238,7 +242,7 @@ def create_debug_message(observations):
                 "range_m": obs[1].maybe_range_m,
                 "bearing_rad": obs[1].maybe_bearing_rad,
             }
-            for obs in observations
+            for obs in observations if obs[1] is not None
         ]
     }
 
@@ -249,7 +253,7 @@ def create_debug_message(observations):
 def create_obs_viz(observations, camera_name, ekf_tov):
     viz_marker = viz.MarkerArray()
 
-    unobserved_beacon_ids = list(range(10))
+    unobserved_beacon_ids = list(range(100))
     for obs_and_time in observations:
         ...
         marker = viz.Marker()
@@ -426,10 +430,9 @@ def tick_estimator(
     # Collect all available observations
     observations = []
     while observations_queue.are_samples_available():
-        detections_msg = observations_queue.pop()
+        receive_time, detections_msg = observations_queue.pop()
         new_detections = compute_observations(detections_msg.detections, tf_buffer)
-        new_detections = sorted(new_detections, key=lambda x: x[0])
-
+        rospy.loginfo(f"{receive_time}, {new_detections}")
         # Update the detections visualization
         viz_publisher.publish(
             create_obs_viz(
@@ -439,6 +442,8 @@ def tick_estimator(
             )
         )
         observations.extend(new_detections)
+        if len(new_detections) == 0:
+            observations.append((receive_time, None))
 
     # Sort them in order
     observations = sorted(observations, key=lambda x: x[0])
@@ -446,7 +451,8 @@ def tick_estimator(
     # Update the filter with each observation
     for time, obs in observations:
         perform_process_update(ekf, tf_buffer, time)
-        ekf.update([obs])
+        if obs is not None:
+            ekf.update([obs])
 
     # publish the visualization
     viz_msg = create_viz_msg(ekf)
@@ -456,12 +462,8 @@ def tick_estimator(
     debug_str = create_debug_message(observations)
     debug_publisher.publish(debug_str)
 
-    if len(observations) == 0:
-        return
-
     # publish the estimate
     tf_message = create_tf_msg(ekf)
-    rospy.loginfo(tf_message)
     if tf_message is not None:
         tf_publisher.publish(tf_message)
 
@@ -559,7 +561,7 @@ def main():
 
 
     ekf_config = esp.EkfSlamConfig(
-        max_num_beacons=10,
+        max_num_beacons=40,
         initial_beacon_uncertainty_m=100.0,
         along_track_process_noise_m_per_rt_meter=0.02,
         cross_track_process_noise_m_per_rt_meter=0.02,

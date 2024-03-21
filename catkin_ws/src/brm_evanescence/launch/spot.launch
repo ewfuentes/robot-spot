@@ -8,4 +8,5 @@
 <include file="$(find spot_viz)/launch/view_robot.launch" />
 
 <include file="$(find brm_evanescence)/launch/stack.launch" />
+
 </launch>
