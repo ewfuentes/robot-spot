@@ -65,9 +65,9 @@ EXPECTED_BELIEF_ROADMAP_OPTIONS = brmp.ExpectedBeliefRoadMapOptions(
     NUM_WORLD_SAMPLES, SEED, BELIEF_ROADMAP_OPTIONS
 )
 
-MAX_NUM_COMPONENTS = 100
-AGGREGATION_METHOD = brmp.LandmarkBeliefRoadMapOptions.ExpectedDeterminant()
-# AGGREGATION_METHOD = brmp.LandmarkBeliefRoadMapOptions.ValueAtRiskDeterminant(0.95)
+MAX_NUM_COMPONENTS = 128
+# AGGREGATION_METHOD = brmp.LandmarkBeliefRoadMapOptions.ExpectedDeterminant()
+AGGREGATION_METHOD = brmp.LandmarkBeliefRoadMapOptions.ValueAtRiskDeterminant(0.95)
 SAMPLED_BELIEF = brmp.LandmarkBeliefRoadMapOptions.SampledBeliefOptions(
     MAX_NUM_COMPONENTS,
     SEED,
@@ -144,6 +144,15 @@ class PlanningNode:
         rospy.Service(
             f"{rospy.get_name()}/execute_plan", ExecutePlan, self.handle_plan_execution_request
         )
+
+        def publish_visualizations(_):
+            self.visualize_road_map(self._road_map)
+            self.visualize_plan(self._road_map, self._plan.nodes)
+
+        rospy.Timer(
+            rospy.Duration(0.1), publish_visualizations
+        )
+
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
 
@@ -154,6 +163,7 @@ class PlanningNode:
 
         self._plan = None
         self._road_map = None
+        self._cur_node_idx = None
 
     def map_callback(self, data):
         with self._map_lock:
@@ -161,6 +171,10 @@ class PlanningNode:
 
     def visualize_road_map(self, road_map):
         marker_out = viz.MarkerArray()
+        if road_map is None:
+            self._viz_publisher.publish(marker_out)
+            return
+
 
         pt_idxs = list(range(len(road_map.points())))
         if road_map.has_start_goal():
@@ -334,8 +348,9 @@ class PlanningNode:
         self._road_map = road_map
         self._plan = Plan(
             time_of_validity=rospy.Time.now(),
-            nodes=plan
+            nodes=plan[1:]
         )
+        self._cur_node_idx = 1
 
         self.visualize_road_map(self._road_map)
         self.visualize_plan(self._road_map, plan)
@@ -343,37 +358,39 @@ class PlanningNode:
         return CreatePlanResponse(success=True)
 
     def handle_plan_execution_request(self, req):
-        if self._plan is None:
+        ANGLE_THRESHOLD_RAD = 0.15
+        DIST_THRESHOLD_M = 0.3
+        if self._plan is None or len(self._plan.nodes) == 0:
             return ExecutePlanResponse(success=False)
 
         trajectory = spot_msgs.msg.TrajectoryGoal()
         trajectory.precise_positioning = True
-        trajectory.duration.data = rospy.Duration(20.0)
         trajectory.target_pose.header.frame_id = BODY_FRAME
 
         timeout = rospy.Duration(1.0)
-        for node_id in self._plan.nodes[1:]:
-            # Turn towards the next point
-            nowish = rospy.Time.now() - rospy.Duration(1.0)
-            map_from_robot = None
-            while True:
-                try:
-                    map_from_robot_ros = self._tf_buffer.lookup_transform(
-                            MAP_FRAME, BODY_FRAME, nowish, timeout)
-                    map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
-                    break
-                except Exception as e:
-                    rospy.loginfo(e)
-                    continue
+        next_node_id = self._plan.nodes[self._cur_node_idx]
+        rospy.loginfo(f'Targeting node {next_node_id}')
+        # Turn towards the next point
+        nowish = rospy.Time()
+        map_from_robot = None
+        goal_in_map = self._road_map.point(next_node_id)
+        map_from_robot_ros = self._tf_buffer.lookup_transform(
+                MAP_FRAME, BODY_FRAME, nowish, timeout)
+        map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
 
+        goal_in_body = map_from_robot.inverse() @ goal_in_map
 
-            goal_in_map = self._road_map.point(node_id)
-            goal_in_body = map_from_robot.inverse() @ goal_in_map
-            if np.linalg.norm(goal_in_body) < 0.5:
-                # We are near the next node, so we skip it
-                continue
-            theta = np.arctan2(goal_in_body[1], goal_in_body[0])
-            robot_from_goal_facing_robot = R.from_rotvec(np.array([0, 0, theta]))
+        if np.linalg.norm(goal_in_body) < DIST_THRESHOLD_M:
+            # We are near the next node, so we skip it
+            rospy.loginfo(f'Already near next node, popping')
+            self._cur_node_idx += 1
+            return ExecutePlanResponse(success=True)
+        theta_rad = np.arctan2(goal_in_body[1], goal_in_body[0])
+
+        rospy.loginfo(f'Initial Angle Error: {theta_rad} is acceptable: {np.abs(theta_rad) < ANGLE_THRESHOLD_RAD}')
+        while np.abs(theta_rad) > ANGLE_THRESHOLD_RAD:
+            rospy.loginfo(f'Angle error: {theta_rad}')
+            robot_from_goal_facing_robot = R.from_rotvec(np.array([0, 0, theta_rad]))
             robot_from_goal_facing_robot_quat = robot_from_goal_facing_robot.as_quat()
 
             trajectory.target_pose.pose.position.x = 0.0
@@ -383,24 +400,37 @@ class PlanningNode:
             trajectory.target_pose.pose.orientation.y = robot_from_goal_facing_robot_quat[1]
             trajectory.target_pose.pose.orientation.z = robot_from_goal_facing_robot_quat[2]
             trajectory.target_pose.pose.orientation.w = robot_from_goal_facing_robot_quat[3]
-            
+
+            trajectory.duration.data = rospy.Duration(10.0)
+            rospy.loginfo(f'Turning towards {next_node_id}')
             self._traj_client.send_goal(trajectory)
-            result = self._traj_client.wait_for_result(rospy.Duration(10.0))
-            time.sleep(2.0)
+            result = self._traj_client.wait_for_result()
+            rospy.loginfo(result)
+            map_from_robot_ros = self._tf_buffer.lookup_transform(
+                    MAP_FRAME, BODY_FRAME, nowish, timeout)
+            map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
 
-            # Move towards the goal
-            nowish = rospy.Time.now() - rospy.Duration(1.0)
-            while True:
-                try:
-                    map_from_robot_ros = self._tf_buffer.lookup_transform(
-                            MAP_FRAME, BODY_FRAME, nowish, timeout)
-                    map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
-                    break
-                except Exception as e:
-                    rospy.loginfo(e)
-                    continue
             goal_in_body = map_from_robot.inverse() @ goal_in_map
+            theta_rad = np.arctan2(goal_in_body[1], goal_in_body[0])
+            if np.abs(theta_rad) <= ANGLE_THRESHOLD_RAD:
+                rospy.loginfo(f'Angle error {theta_rad}, next goal in body: {goal_in_body.transpose()}')
+                return ExecutePlanResponse(success=True)
+        time.sleep(2.0)
 
+        # Move towards the goal
+        map_from_robot_ros = self._tf_buffer.lookup_transform(
+                MAP_FRAME, BODY_FRAME, nowish, timeout)
+        map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
+        goal_in_body = map_from_robot.inverse() @ goal_in_map
+
+        while (np.linalg.norm(goal_in_body) > 0.3):
+            nowish = rospy.Time()
+            pose_age = rospy.Time.now() - map_from_robot_ros.header.stamp
+            rospy.loginfo(f'Goal in body: {goal_in_body.transpose()} robot pose dt: {pose_age.secs} {pose_age.nsecs} dist_m: {np.linalg.norm(goal_in_body)}')
+
+            dist_to_goal_m = np.linalg.norm(goal_in_body)
+            if dist_to_goal_m > 1.0:
+                goal_in_body = goal_in_body / dist_to_goal_m
 
             trajectory.target_pose.pose.position.x = goal_in_body[0]
             trajectory.target_pose.pose.position.y = goal_in_body[1]
@@ -409,14 +439,22 @@ class PlanningNode:
             trajectory.target_pose.pose.orientation.y = 0.0
             trajectory.target_pose.pose.orientation.z = 0.0
             trajectory.target_pose.pose.orientation.w = 1.0
-            
-            self._traj_client.send_goal(trajectory)
-            result = self._traj_client.wait_for_result(rospy.Duration(10.0))
-            time.sleep(2.0)
 
+            NOMINAL_SPEED_MPS = 0.25
+            dist_m = np.linalg.norm(goal_in_body)
+            nominal_duration_s = dist_m / NOMINAL_SPEED_MPS
+            trajectory.duration.data = rospy.Duration(nominal_duration_s)
+            rospy.loginfo(f'Moving towards {next_node_id}. Nominal Duration: {nominal_duration_s}')
+            result = self._traj_client.send_goal_and_wait(trajectory)
+            rospy.loginfo(result)
 
+            map_from_robot_ros = self._tf_buffer.lookup_transform(
+                    MAP_FRAME, BODY_FRAME, nowish, timeout)
+            map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
+            goal_in_body = map_from_robot.inverse() @ goal_in_map
+        time.sleep(2)
+        self._cur_node_idx += 1
         return ExecutePlanResponse(success=True)
-
 
 
 if __name__ == "__main__":
