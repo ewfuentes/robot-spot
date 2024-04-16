@@ -163,6 +163,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   src/estimation_node.py
   src/planning_node.py
+  src/rerun_estimator.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
