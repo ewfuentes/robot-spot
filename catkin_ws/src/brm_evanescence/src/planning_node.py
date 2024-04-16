@@ -147,7 +147,8 @@ class PlanningNode:
 
         def publish_visualizations(_):
             self.visualize_road_map(self._road_map)
-            self.visualize_plan(self._road_map, self._plan.nodes)
+            if self._plan:
+                self.visualize_plan(self._road_map, self._plan.nodes)
 
         rospy.Timer(
             rospy.Duration(0.1), publish_visualizations
@@ -193,6 +194,7 @@ class PlanningNode:
             marker.pose.position.x = pt[0]
             marker.pose.position.y = pt[1]
             marker.pose.orientation.w = 1.0
+            marker.frame_locked = True
 
             marker.scale.x = 0.1
             marker.scale.y = 0.1
@@ -228,6 +230,7 @@ class PlanningNode:
             marker.pose.position.x = pt[0] + 0.15
             marker.pose.position.y = pt[1]
             marker.pose.orientation.w = 1.0
+            marker.frame_locked = True
             TEXT_HEIGHT_M = 0.1
             marker.scale.z = TEXT_HEIGHT_M
             marker.color.r = 0.8
@@ -255,6 +258,7 @@ class PlanningNode:
         edge_marker.type = viz.Marker.LINE_LIST
         edge_marker.action = viz.Marker.ADD
         edge_marker.pose.orientation.w = 1.0
+        edge_marker.frame_locked = True
 
         edge_marker.scale.x = 0.01
         edge_marker.color.r = 0.6
@@ -286,6 +290,7 @@ class PlanningNode:
         plan_marker.action = viz.Marker.ADD
         plan_marker.pose.position.z = 0.1
         plan_marker.pose.orientation.w = 1.0
+        plan_marker.frame_locked = True
 
         plan_marker.scale.x = 0.02
         plan_marker.color.r = 0.1
@@ -350,7 +355,7 @@ class PlanningNode:
             time_of_validity=rospy.Time.now(),
             nodes=plan[1:]
         )
-        self._cur_node_idx = 1
+        self._cur_node_idx = 0
 
         self.visualize_road_map(self._road_map)
         self.visualize_plan(self._road_map, plan)
@@ -358,13 +363,20 @@ class PlanningNode:
         return CreatePlanResponse(success=True)
 
     def handle_plan_execution_request(self, req):
+        while self._cur_node_idx < len(self._plan.nodes):
+            step_result = self.handle_plan_execution_request_step(req)
+            if not step_result.success or not req.autostep:
+                return step_result
+
+        return ExecutePlanResponse(success=True)
+
+    def handle_plan_execution_request_step(self, req):
         ANGLE_THRESHOLD_RAD = 0.15
         DIST_THRESHOLD_M = 0.3
-        if self._plan is None or len(self._plan.nodes) == 0:
+        if self._plan is None or len(self._plan.nodes) == 0 or self._cur_node_idx >= len(self._plan.nodes):
             return ExecutePlanResponse(success=False)
 
         trajectory = spot_msgs.msg.TrajectoryGoal()
-        trajectory.precise_positioning = True
         trajectory.target_pose.header.frame_id = BODY_FRAME
 
         timeout = rospy.Duration(1.0)
@@ -393,6 +405,7 @@ class PlanningNode:
             robot_from_goal_facing_robot = R.from_rotvec(np.array([0, 0, theta_rad]))
             robot_from_goal_facing_robot_quat = robot_from_goal_facing_robot.as_quat()
 
+            trajectory.precise_positioning = True
             trajectory.target_pose.pose.position.x = 0.0
             trajectory.target_pose.pose.position.y = 0.0
             trajectory.target_pose.pose.position.z = 0.0
@@ -432,6 +445,8 @@ class PlanningNode:
             if dist_to_goal_m > 1.0:
                 goal_in_body = goal_in_body / dist_to_goal_m
 
+            trajectory.precise_positioning = dist_to_goal_m < 2.0
+
             trajectory.target_pose.pose.position.x = goal_in_body[0]
             trajectory.target_pose.pose.position.y = goal_in_body[1]
             trajectory.target_pose.pose.position.z = 0.0
@@ -452,7 +467,7 @@ class PlanningNode:
                     MAP_FRAME, BODY_FRAME, nowish, timeout)
             map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
             goal_in_body = map_from_robot.inverse() @ goal_in_map
-        time.sleep(2)
+        time.sleep(1)
         self._cur_node_idx += 1
         return ExecutePlanResponse(success=True)
 

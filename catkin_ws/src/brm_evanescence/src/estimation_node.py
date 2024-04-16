@@ -281,6 +281,7 @@ def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
         marker.pose.position.z = 0.0
 
         marker.pose.orientation.w = 1.0
+        marker.frame_locked=True
 
         marker.scale.x = 0.2
         marker.scale.y = 0.2
@@ -373,6 +374,7 @@ def create_viz_msg(ekf):
         marker.action = viz.Marker.ADD
         marker.scale.x = 0.01
         marker.pose.orientation.w = 1.0
+        marker.frame_locked = True
 
         beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
         beacon_cov = ekf.estimate.beacon_cov(beacon_id)
@@ -409,6 +411,7 @@ def create_viz_msg(ekf):
     marker.action = viz.Marker.ADD
     marker.scale.x = 0.01
     marker.pose.orientation.w = 1.0
+    marker.frame_locked = True
 
     local_from_robot = ekf.estimate.local_from_robot()
     robot_cov = ekf.estimate.robot_cov()
@@ -527,6 +530,7 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         marker.type = viz.Marker.CUBE
         marker.action = viz.Marker.ADD
         MARKER_HEIGHT_M = 0.5
+        marker.frame_locked = True
         marker.pose.position.x = beacon_in_local[0]
         marker.pose.position.y = beacon_in_local[1]
         marker.pose.position.z = MARKER_HEIGHT_M / 2.0
@@ -554,6 +558,7 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         text_marker.pose.position.y = beacon_in_local[1]
         text_marker.pose.position.z = MARKER_HEIGHT_M + 0.1
         text_marker.pose.orientation.w = 1.0
+        text_marker.frame_locked = True
 
         TEXT_HEIGHT_M = 0.2
         text_marker.scale.z = TEXT_HEIGHT_M
