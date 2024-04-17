@@ -37,6 +37,7 @@ docker run -it --net=host --gpus all \
     --env="XAUTHORITY=$XAUTH" \
     --volume="$XAUTH:$XAUTH:rw" \
     --volume="$PWD:/host"\
+    --volume="$PWD/.bash_history:/home/robot/.bash_history"\
     --volume="$HOME/.ssh:/home/robot/.ssh"\
     --privileged \
     --user="$(id -u):$(id -g)" \

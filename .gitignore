@@ -4,5 +4,6 @@ catkin_ws/devel
 catkin_ws/logs
 
 .secrets
+.bash_history
 # ignore bag files
 *.bag
