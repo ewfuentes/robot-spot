@@ -80,7 +80,8 @@ class ObservationsQueue:
         with self._lock:
             if not self._are_samples_available_no_lock():
                 return None
-            return self._queue.get_nowait().item
+            item = self._queue.get_nowait()
+            return item.receive_time, item.item
 
 
 def robot_time_from_ros_time(stamp: rospy.Time):
@@ -178,8 +179,9 @@ def compute_observations(detections, tf_buffer):
         stamp = stamped_pose.header.stamp
         time_of_validity = robot_time_from_ros_time(stamp)
         try:
-            body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, stamp, timeout)
-        except:
+            body_from_camera = tf_buffer.lookup_transform(BODY_FRAME, camera_frame, rospy.Time(0), timeout)
+        except Exception as e:
+            rospy.loginfo(f"exception during observation computation: {e}")
             continue
 
         camera_from_tag = detection.pose.pose
@@ -205,28 +207,36 @@ def compute_observations(detections, tf_buffer):
 #  Note that the EKF should be locked when calling this function
 def perform_process_update(ekf, tf_buffer, update_time):
 
+    timeout_s = rospy.Duration(1.0)
     dt = update_time - ekf.estimate.time_of_validity
     dt_days = dt / datetime.timedelta(days=1)
     if dt_days > 1.0:
-        ekf.estimate.time_of_validity = update_time - rtp.as_duration(0.01)
+        odom_from_robot = tf_buffer.lookup_transform(
+            "odom", BODY_FRAME, rospy.Time(0), timeout_s
+        )
+        ekf.estimate.time_of_validity = robot_time_from_ros_time(odom_from_robot.header.stamp) + rtp.as_duration(0.1)
 
     ros_past_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
 
     # try:
-    timeout_s = rospy.Duration(1.0)
-    ros_update_time = ros_time_from_robot_time(update_time)
-    odom_from_past_robot = tf_buffer.lookup_transform(
-        "odom", BODY_FRAME, ros_past_time, timeout_s
-    )
-    odom_from_new_robot = tf_buffer.lookup_transform(
-        "odom", BODY_FRAME, ros_update_time, timeout_s
-    )
+    try:
+        ros_update_time = ros_time_from_robot_time(update_time)
 
-    odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
-    odom_from_new_robot = robot_se2_from_stamped_transform(odom_from_new_robot)
-    past_robot_from_new_robot = odom_from_past_robot.inverse() * odom_from_new_robot
+        odom_from_past_robot = tf_buffer.lookup_transform(
+            "odom", BODY_FRAME, ros_past_time, timeout_s
+        )
+        odom_from_new_robot = tf_buffer.lookup_transform(
+            "odom", BODY_FRAME, ros_update_time, timeout_s
+        )
 
-    ekf.predict(update_time, past_robot_from_new_robot)
+        odom_from_past_robot = robot_se2_from_stamped_transform(odom_from_past_robot)
+        odom_from_new_robot = robot_se2_from_stamped_transform(odom_from_new_robot)
+        past_robot_from_new_robot = odom_from_past_robot.inverse() * odom_from_new_robot
+
+        ekf.predict(update_time, past_robot_from_new_robot)
+    except Exception as e:
+        rospy.loginfo(f'failed to look up pose. Past: {ros_past_time} New: {ros_update_time} {e}')
+        ...
 
 
 def create_debug_message(observations):
@@ -238,7 +248,7 @@ def create_debug_message(observations):
                 "range_m": obs[1].maybe_range_m,
                 "bearing_rad": obs[1].maybe_bearing_rad,
             }
-            for obs in observations
+            for obs in observations if obs[1] is not None
         ]
     }
 
@@ -246,10 +256,10 @@ def create_debug_message(observations):
     return out
 
 
-def create_obs_viz(observations, camera_name, ekf_tov):
+def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
     viz_marker = viz.MarkerArray()
 
-    unobserved_beacon_ids = list(range(10))
+    unobserved_beacon_ids = list(range(100))
     for obs_and_time in observations:
         ...
         marker = viz.Marker()
@@ -271,17 +281,29 @@ def create_obs_viz(observations, camera_name, ekf_tov):
         marker.pose.position.z = 0.0
 
         marker.pose.orientation.w = 1.0
+        marker.frame_locked=True
 
         marker.scale.x = 0.2
         marker.scale.y = 0.2
         marker.scale.z = 0.2
 
         is_old = obs_and_time[0] - ekf_tov < -rtp.as_duration(0.5)
+        if is_old:
+            marker.color.a = 1.0
+            marker.color.r = 1.0 if is_old else 0.25
+            marker.color.g = 0.25
+            marker.color.b = 0.25 if is_old else 1.0
+        elif obs.maybe_id in ignore_list:
+            marker.color.a = 1.0
+            marker.color.r = 0.75
+            marker.color.g = 0.75
+            marker.color.b = 0.75
+        else:
+            marker.color.a = 1.0
+            marker.color.r = 0.25
+            marker.color.g = 0.25
+            marker.color.b = 1.0
 
-        marker.color.a = 1.0
-        marker.color.r = 1.0 if is_old else 0.25
-        marker.color.g = 0.25
-        marker.color.b = 0.25 if is_old else 1.0
         viz_marker.markers.append(marker)
 
     for id in unobserved_beacon_ids:
@@ -301,6 +323,7 @@ def create_obs_viz(observations, camera_name, ekf_tov):
 
 def create_tf_msg(ekf):
     if ekf.estimate.time_of_validity == rtp.RobotTimestamp():
+        rospy.loginfo('Invalid ToV')
         return None
 
     publish_time = ros_time_from_robot_time(ekf.estimate.time_of_validity)
@@ -324,7 +347,7 @@ def create_tf_msg(ekf):
             publish_time,
         )
     )
-
+    rospy.loginfo(tfs[-1])
     return tf2_msgs.msg.TFMessage(tfs)
 
 
@@ -351,6 +374,7 @@ def create_viz_msg(ekf):
         marker.action = viz.Marker.ADD
         marker.scale.x = 0.01
         marker.pose.orientation.w = 1.0
+        marker.frame_locked = True
 
         beacon_in_local = ekf.estimate.beacon_in_local(beacon_id)
         beacon_cov = ekf.estimate.beacon_cov(beacon_id)
@@ -387,6 +411,7 @@ def create_viz_msg(ekf):
     marker.action = viz.Marker.ADD
     marker.scale.x = 0.01
     marker.pose.orientation.w = 1.0
+    marker.frame_locked = True
 
     local_from_robot = ekf.estimate.local_from_robot()
     robot_cov = ekf.estimate.robot_cov()
@@ -418,35 +443,42 @@ def tick_estimator(
     timer_event,
     observations_queue,
     ekf,
+    ignore_list,
     tf_buffer,
     tf_publisher,
     viz_publisher,
     debug_publisher,
 ):
     # Collect all available observations
+    rospy.loginfo(f'ticking estimator: {ignore_list}')
     observations = []
     while observations_queue.are_samples_available():
-        detections_msg = observations_queue.pop()
+        receive_time, detections_msg = observations_queue.pop()
         new_detections = compute_observations(detections_msg.detections, tf_buffer)
-        new_detections = sorted(new_detections, key=lambda x: x[0])
-
         # Update the detections visualization
         viz_publisher.publish(
             create_obs_viz(
                 new_detections,
                 detections_msg.header.frame_id,
                 ekf.estimate.time_of_validity,
+                ignore_list,
             )
         )
         observations.extend(new_detections)
+        if len(new_detections) == 0:
+            observations.append((receive_time, None))
 
     # Sort them in order
     observations = sorted(observations, key=lambda x: x[0])
 
     # Update the filter with each observation
     for time, obs in observations:
+        if obs is not None and obs.maybe_id in ignore_list:
+            continue
+
         perform_process_update(ekf, tf_buffer, time)
-        ekf.update([obs])
+        if obs is not None:
+            ekf.update([obs])
 
     # publish the visualization
     viz_msg = create_viz_msg(ekf)
@@ -456,13 +488,10 @@ def tick_estimator(
     debug_str = create_debug_message(observations)
     debug_publisher.publish(debug_str)
 
-    if len(observations) == 0:
-        return
-
     # publish the estimate
     tf_message = create_tf_msg(ekf)
-    rospy.loginfo(tf_message)
     if tf_message is not None:
+        rospy.loginfo('publishing tf')
         tf_publisher.publish(tf_message)
 
 
@@ -501,6 +530,7 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         marker.type = viz.Marker.CUBE
         marker.action = viz.Marker.ADD
         MARKER_HEIGHT_M = 0.5
+        marker.frame_locked = True
         marker.pose.position.x = beacon_in_local[0]
         marker.pose.position.y = beacon_in_local[1]
         marker.pose.position.z = MARKER_HEIGHT_M / 2.0
@@ -528,6 +558,7 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
         text_marker.pose.position.y = beacon_in_local[1]
         text_marker.pose.position.z = MARKER_HEIGHT_M + 0.1
         text_marker.pose.orientation.w = 1.0
+        text_marker.frame_locked = True
 
         TEXT_HEIGHT_M = 0.2
         text_marker.scale.z = TEXT_HEIGHT_M
@@ -559,7 +590,7 @@ def main():
 
 
     ekf_config = esp.EkfSlamConfig(
-        max_num_beacons=10,
+        max_num_beacons=40,
         initial_beacon_uncertainty_m=100.0,
         along_track_process_noise_m_per_rt_meter=0.02,
         cross_track_process_noise_m_per_rt_meter=0.02,
@@ -576,6 +607,7 @@ def main():
     camera_list = ["frontleft", "frontright", "left", "back", "right"]
 
     observations_queue = ObservationsQueue([f"{c}_fisheye" for c in camera_list])
+    ignore_list = [[]]
     ekf = esp.EkfSlam(ekf_config, rtp.RobotTimestamp())
 
     rospy.Service(f'{rospy.get_name()}/save_map', SaveMap, lambda req: save_map_handler(req, esp.EkfSlam(ekf)))
@@ -583,6 +615,12 @@ def main():
 
     def obs_callback(data):
         observations_queue.insert(data)
+
+    def ignore_callback(data):
+        if ignore_list:
+            ignore_list.pop(0)
+        ignore_list.append(data.data)
+        rospy.loginfo(f'setting ignore list: {ignore_list}')
 
     for camera in camera_list:
         topic_name = f"/spot/apriltag/{camera}/tag_detections"
@@ -594,12 +632,17 @@ def main():
             )
         )
 
+    ignore_subscriber = rospy.Subscriber(
+            '/ignore_landmarks', std_msgs.msg.Int32MultiArray, ignore_callback
+    )
+
     estimator_tick = rospy.Timer(
         rospy.Duration(0.05),
         lambda timer_event: tick_estimator(
             timer_event,
             observations_queue,
             ekf,
+            ignore_list[0],
             tf_buffer,
             tf_publisher,
             viz_publisher,

@@ -3,6 +3,6 @@
 <include file="$(find brm_evanescence)/launch/image_proc.launch" />
 
 <node name="estimation_node" pkg="brm_evanescence" type="estimation_node.py" />
-<node name="planning_node" pkg="brm_evanescence" type="planning_node.py" />
+<node name="planning_node" pkg="brm_evanescence" type="planning_node.py" respawn="true"/>
 
 </launch>
