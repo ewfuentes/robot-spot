@@ -71,7 +71,40 @@ standalone_tags: [
   {id: 87, size: 0.09525},
   {id: 88, size: 0.09525},
   {id: 89, size: 0.09525},
+
+  {id: 200, size: 0.072},
+  {id: 201, size: 0.072},
+  {id: 202, size: 0.072},
+  {id: 203, size: 0.072},
+  {id: 204, size: 0.072},
+  {id: 205, size: 0.072},
+  {id: 206, size: 0.072},
+  {id: 207, size: 0.072},
+  {id: 208, size: 0.072},
+  {id: 209, size: 0.072},
+  {id: 210, size: 0.072},
+  {id: 211, size: 0.072},
+  {id: 212, size: 0.072},
+  {id: 213, size: 0.072},
+  {id: 214, size: 0.072},
+  {id: 215, size: 0.072},
+  {id: 216, size: 0.072},
+  {id: 217, size: 0.072},
+  {id: 218, size: 0.072},
+  {id: 219, size: 0.072},
+  {id: 220, size: 0.072},
+  {id: 221, size: 0.072},
+  {id: 222, size: 0.072},
+  {id: 223, size: 0.072},
+  {id: 224, size: 0.072},
+  {id: 225, size: 0.072},
+  {id: 226, size: 0.072},
+  {id: 227, size: 0.072},
+  {id: 228, size: 0.072},
+  {id: 229, size: 0.072},
 ]
+
+
 
 # ## Tag bundle definitions
 # ### Remarks
