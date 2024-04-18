@@ -39,6 +39,7 @@ docker run -it --net=host --gpus all \
     --volume="$PWD:/host"\
     --volume="$PWD/.bash_history:/home/robot/.bash_history"\
     --volume="$HOME/.ssh:/home/robot/.ssh"\
+    --device=/dev/input/js0\
     --privileged \
     --user="$(id -u):$(id -g)" \
     robot-spot:latest \
