@@ -33,7 +33,7 @@ RUN sudo rosdep init \
 
 
 RUN DEBIAN_FRONTEND=noninteractive sudo apt install -y python3-pip ros-noetic-ackermann-msgs \
-  wget libtool m4 automake
+  wget libtool m4 automake iproute2 inetutils-ping vim less
 
 RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
 RUN echo "source /host/catkin_ws/devel/setup.bash" >> ~/.bashrc

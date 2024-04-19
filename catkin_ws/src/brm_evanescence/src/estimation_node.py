@@ -259,7 +259,7 @@ def create_debug_message(observations):
 def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
     viz_marker = viz.MarkerArray()
 
-    unobserved_beacon_ids = list(range(100))
+    unobserved_beacon_ids = list(range(255))
     for obs_and_time in observations:
         ...
         marker = viz.Marker()
