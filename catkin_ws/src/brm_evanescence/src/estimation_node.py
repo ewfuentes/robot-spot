@@ -259,13 +259,10 @@ def create_debug_message(observations):
 def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
     viz_marker = viz.MarkerArray()
 
-    unobserved_beacon_ids = list(range(255))
     for obs_and_time in observations:
-        ...
         marker = viz.Marker()
         obs_tov = ros_time_from_robot_time(obs_and_time[0])
         obs = obs_and_time[1]
-        unobserved_beacon_ids.remove(obs.maybe_id)
         marker_header = std_msgs.msg.Header()
         marker_header.stamp = obs_tov
         marker_header.frame_id = BODY_FRAME
@@ -275,13 +272,14 @@ def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
         marker.id = obs.maybe_id
         marker.type = viz.Marker.SPHERE
         marker.action = viz.Marker.ADD
+        marker.lifetime = rospy.Duration(0.5)
 
         marker.pose.position.x = obs.maybe_range_m * np.cos(obs.maybe_bearing_rad)
         marker.pose.position.y = obs.maybe_range_m * np.sin(obs.maybe_bearing_rad)
         marker.pose.position.z = 0.0
 
         marker.pose.orientation.w = 1.0
-        marker.frame_locked=True
+        marker.frame_locked = True
 
         marker.scale.x = 0.2
         marker.scale.y = 0.2
@@ -306,18 +304,6 @@ def create_obs_viz(observations, camera_name, ekf_tov, ignore_list):
 
         viz_marker.markers.append(marker)
 
-    for id in unobserved_beacon_ids:
-        marker = viz.Marker()
-        marker.header.frame_id = BODY_FRAME
-        marker.ns = f"obs_{camera_name}"
-        marker.id = id
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = 0.1
-        marker.scale.y = 0.1
-        marker.scale.z = 0.1
-
-        marker.action = viz.Marker.DELETE
-        viz_marker.markers.append(marker)
     return viz_marker
 
 

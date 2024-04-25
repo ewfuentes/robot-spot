@@ -50,6 +50,7 @@ RUN pip install --upgrade pip && pip install --upgrade setuptools wheel
 COPY --chown=robot:robot .tmux.conf /home/$USERNAME/.tmux.conf
 RUN sudo mkdir /host
 COPY --chown=robot:robot .secrets /host
+COPY --chown=robot:robot topics_to_record.txt /host
 COPY --chown=robot:robot beacon_sim*_aarch64.whl /host
 COPY --chown=robot:robot catkin_ws /host/catkin_ws
 COPY --chown=robot:robot run_me_in_docker.sh /host/
