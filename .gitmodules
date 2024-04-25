@@ -1,3 +1,6 @@
 [submodule "catkin_ws/src/spot_ros"]
 	path = catkin_ws/src/spot_ros
 	url = git@github.com:ewfuentes/spot_ros.git
+[submodule "catkin_ws/src/joystick_remapper"]
+	path = catkin_ws/src/joystick_remapper
+	url = git@github.com:Qrpucp/joystick_remapper.git
