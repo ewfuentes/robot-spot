@@ -27,7 +27,7 @@ echo ""
 echo "Running docker..."
 
 xhost +local:docker
-docker build -t robot-spot:latest .
+docker build --platform linux/amd64 -t robot-spot:latest .
 
 # Original command (broke)
 docker run -it --net=host --gpus all \

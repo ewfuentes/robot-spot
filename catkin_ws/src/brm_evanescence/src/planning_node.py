@@ -133,6 +133,13 @@ def robot_se2_from_stamped_transform(b_from_a_msg):
 
 class PlanningNode:
     def __init__(self):
+        self._map_lock = threading.Lock()
+        self._map = None
+
+        self._plan = None
+        self._road_map = None
+        self._cur_node_idx = None
+
         rospy.init_node("planning_node")
 
         rospy.Subscriber("/map", Map, self.map_callback)
@@ -158,13 +165,6 @@ class PlanningNode:
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
 
         self._traj_client = actionlib.SimpleActionClient('/spot/trajectory', spot_msgs.msg.TrajectoryAction)
-
-        self._map_lock = threading.Lock()
-        self._map = None
-
-        self._plan = None
-        self._road_map = None
-        self._cur_node_idx = None
 
     def map_callback(self, data):
         with self._map_lock:

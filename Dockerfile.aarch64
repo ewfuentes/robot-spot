@@ -35,11 +35,24 @@ RUN sudo rosdep init \
 RUN DEBIAN_FRONTEND=noninteractive sudo apt install -y python3-pip ros-noetic-ackermann-msgs \
   wget libtool m4 automake
 
+RUN DEBIAN_FRONTEND=noninteractive sudo apt install -y iproute2 less vim
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bash_profile
+RUN echo "source /host/catkin_ws/devel/setup.bash" >> ~/.bash_profile
+RUN echo "source /host/.secrets" >> ~/.bash_profile
+RUN echo "export PATH=/home/robot/.local/bin:\$PATH" >> ~/.bash_profile
 RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
 RUN echo "source /host/catkin_ws/devel/setup.bash" >> ~/.bashrc
 RUN echo "source /host/.secrets" >> ~/.bashrc
-COPY .tmux.conf /home/$USERNAME/.tmux.conf
-COPY catkin_ws /host/
-COPY run_me_in_docker.sh /host/
-RUN ./host/run_me_in_docker.sh
+RUN echo "export PATH=/home/robot/.local/bin:\$PATH" >> ~/.bashrc
+RUN sudo apt update
+RUN pip install --upgrade pip && pip install --upgrade setuptools wheel
+COPY --chown=robot:robot .tmux.conf /home/$USERNAME/.tmux.conf
+RUN sudo mkdir /host
+COPY --chown=robot:robot .secrets /host
+COPY --chown=robot:robot beacon_sim*_aarch64.whl /host
+COPY --chown=robot:robot catkin_ws /host/catkin_ws
+COPY --chown=robot:robot run_me_in_docker.sh /host/
+RUN /bin/bash -l -c "cd /host/catkin_ws && catkin clean -y && catkin build"
+RUN  /bin/bash -l -c "cd /host && ./run_me_in_docker.sh"
 WORKDIR /host

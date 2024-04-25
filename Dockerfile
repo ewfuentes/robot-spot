@@ -32,7 +32,7 @@ RUN sudo rosdep init \
  && rosdep update
 
 
-RUN DEBIAN_FRONTEND=noninteractive sudo apt install -y python3-pip ros-noetic-ackermann-msgs \
+RUN DEBIAN_FRONTEND=noninteractive sudo apt update && sudo apt install -y python3-pip ros-noetic-ackermann-msgs \
   wget libtool m4 automake iproute2 inetutils-ping vim less
 
 RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
