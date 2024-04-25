@@ -6,5 +6,10 @@ string beacon_potential_path
 string road_map_path
 string planning_method
 int32 goal_node
+int32[] absent_landmarks
+int32[] present_landmarks
+int32 seed
 ---
 bool success
+int32[] absent_landmarks
+int32[] present_landmarks

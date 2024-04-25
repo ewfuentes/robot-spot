@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 
+import std_msgs
 import spot_msgs.msg
 import rospy
 import tf2_ros
@@ -144,8 +145,9 @@ class PlanningNode:
 
         rospy.Subscriber("/map", Map, self.map_callback)
         self._viz_publisher = rospy.Publisher("/plan_visualization", viz.MarkerArray, queue_size=16)
+        self._ignore_list_publisher = rospy.Publisher("/ignore_landmarks", std_msgs.msg.Int32MultiArray, queue_size=16)
         rospy.Service(
-            f"{rospy.get_name()}/create_plan", CreatePlan, self.handle_plan_request
+                f"{rospy.get_name()}/create_plan", CreatePlan, self.handle_plan_request
         )
 
         rospy.Service(
@@ -336,6 +338,17 @@ class PlanningNode:
             prmp.StartGoalPair(start_loc, goal_loc, CONNECTION_RADIUS_M)
         )
 
+        observations = {x: True for x in req.present_landmarks}
+        observations.update({x: False for x in req.absent_landmarks})
+
+        # Sample a world
+        beacon_potential = beacon_potential.condition_on(observations)
+        assignment = beacon_potential.sample(req.seed)
+        present_landmarks = [k for k, v in assignment.items() if v]
+        absent_landmarks = [k for k, v in assignment.items() if not v]
+        absent_landmarks_msg = std_msgs.msg.Int32MultiArray(data=absent_landmarks)
+        self._ignore_list_publisher.publish(absent_landmarks_msg)
+
         # call the appropriate planner
         if req.planning_method == CreatePlanRequest.OPTIMISTIC_BRM:
             plan = run_optimistic_brm_planner(road_map, beacon_potential, ekf)
@@ -360,7 +373,10 @@ class PlanningNode:
         self.visualize_road_map(self._road_map)
         self.visualize_plan(self._road_map, plan)
 
-        return CreatePlanResponse(success=True)
+        return CreatePlanResponse(
+            success=True,
+            absent_landmarks=absent_landmarks,
+            present_landmarks=present_landmarks)
 
     def handle_plan_execution_request(self, req):
         while self._cur_node_idx < len(self._plan.nodes):
