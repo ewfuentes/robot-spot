@@ -342,7 +342,7 @@ class PlanningNode:
         observations.update({x: False for x in req.absent_landmarks})
 
         # Sample a world
-        beacon_potential = beacon_potential.condition_on(observations)
+        beacon_potential = beacon_potential.conditioned_on(observations)
         assignment = beacon_potential.sample(req.seed)
         present_landmarks = [k for k, v in assignment.items() if v]
         absent_landmarks = [k for k, v in assignment.items() if not v]
