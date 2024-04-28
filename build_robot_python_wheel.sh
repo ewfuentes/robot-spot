@@ -1,4 +1,6 @@
 
+rm beacon_sim*.whl
+
 cd ../robot
 
 GIT_HASH=`git rev-parse --short HEAD`
