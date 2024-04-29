@@ -9,6 +9,7 @@ import rospy
 import tf2_ros
 import visualization_msgs.msg as viz
 import geometry_msgs
+import sensor_msgs
 import actionlib
 import time
 import numpy as np
@@ -144,6 +145,7 @@ class PlanningNode:
         rospy.init_node("planning_node")
 
         rospy.Subscriber("/map", Map, self.map_callback)
+        rospy.Subscriber("/bluetooth_teleop/joy", sensor_msgs.msg.Joy, self.joy_callback)
         self._viz_publisher = rospy.Publisher("/plan_visualization", viz.MarkerArray, queue_size=16)
         self._ignore_list_publisher = rospy.Publisher("/ignore_landmarks", std_msgs.msg.Int32MultiArray, queue_size=16)
         rospy.Service(
@@ -167,6 +169,15 @@ class PlanningNode:
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer)
 
         self._traj_client = actionlib.SimpleActionClient('/spot/trajectory', spot_msgs.msg.TrajectoryAction)
+
+    def joy_callback(self, data):
+        enable_button_set = data.buttons[4] or data.buttons[5]
+        stop_traj_button_set = data.buttons[2] > 0
+        is_plan_set = self._plan is not None
+        if enable_button_set and stop_traj_button_set:
+            rospy.loginfo('received stop request')
+            if is_plan_set:
+                self._cur_node_idx = len(self._plan.nodes)
 
     def map_callback(self, data):
         with self._map_lock:
@@ -342,8 +353,8 @@ class PlanningNode:
         observations.update({x: False for x in req.absent_landmarks})
 
         # Sample a world
-        beacon_potential = beacon_potential.conditioned_on(observations)
-        assignment = beacon_potential.sample(req.seed)
+        conditioned_beacon_potential = beacon_potential.conditioned_on(observations)
+        assignment = conditioned_beacon_potential.sample(req.seed)
         present_landmarks = [k for k, v in assignment.items() if v]
         absent_landmarks = [k for k, v in assignment.items() if not v]
         absent_landmarks_msg = std_msgs.msg.Int32MultiArray(data=absent_landmarks)
