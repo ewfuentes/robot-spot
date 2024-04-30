@@ -427,7 +427,7 @@ class PlanningNode:
         theta_rad = np.arctan2(goal_in_body[1], goal_in_body[0])
 
         rospy.loginfo(f'Initial Angle Error: {theta_rad} is acceptable: {np.abs(theta_rad) < ANGLE_THRESHOLD_RAD}')
-        while np.abs(theta_rad) > ANGLE_THRESHOLD_RAD:
+        while np.abs(theta_rad) > ANGLE_THRESHOLD_RAD and self._cur_node_idx < len(self._plan.nodes):
             rospy.loginfo(f'Angle error: {theta_rad}')
             robot_from_goal_facing_robot = R.from_rotvec(np.array([0, 0, theta_rad]))
             robot_from_goal_facing_robot_quat = robot_from_goal_facing_robot.as_quat()
@@ -463,7 +463,7 @@ class PlanningNode:
         map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
         goal_in_body = map_from_robot.inverse() @ goal_in_map
 
-        while (np.linalg.norm(goal_in_body) > 0.3):
+        while (np.linalg.norm(goal_in_body) > 0.3) and self._cur_node_idx < len(self._plan.nodes):
             nowish = rospy.Time()
             pose_age = rospy.Time.now() - map_from_robot_ros.header.stamp
             rospy.loginfo(f'Goal in body: {goal_in_body.transpose()} robot pose dt: {pose_age.secs} {pose_age.nsecs} dist_m: {np.linalg.norm(goal_in_body)}')
