@@ -564,7 +564,7 @@ def publish_map(timer_event, ekf, map_publisher, viz_publisher):
 def main():
     rospy.init_node("estimation_node")
 
-    tf_buffer = tf2_ros.Buffer(rospy.Duration(60.0))
+    tf_buffer = tf2_ros.Buffer(rospy.Duration(600.0))
     tf_listener = tf2_ros.TransformListener(tf_buffer)
     tf_publisher = rospy.Publisher("/tf", tf2_msgs.msg.TFMessage, queue_size=16)
     viz_publisher = rospy.Publisher("/estimate_markers", viz.MarkerArray, queue_size=16)

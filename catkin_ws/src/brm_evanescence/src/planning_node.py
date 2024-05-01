@@ -455,7 +455,6 @@ class PlanningNode:
             if np.abs(theta_rad) <= ANGLE_THRESHOLD_RAD:
                 rospy.loginfo(f'Angle error {theta_rad}, next goal in body: {goal_in_body.transpose()}')
                 return ExecutePlanResponse(success=True)
-        time.sleep(2.0)
 
         # Move towards the goal
         map_from_robot_ros = self._tf_buffer.lookup_transform(
@@ -494,7 +493,7 @@ class PlanningNode:
                     MAP_FRAME, BODY_FRAME, nowish, timeout)
             map_from_robot = robot_se2_from_stamped_transform(map_from_robot_ros)
             goal_in_body = map_from_robot.inverse() @ goal_in_map
-        time.sleep(1)
+
         self._cur_node_idx += 1
         return ExecutePlanResponse(success=True)
 
